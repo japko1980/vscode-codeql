@@ -1,3 +1,4 @@
+import { EOL } from "os";
 import { spawn } from "child-process-promise";
 import * as child_process from "child_process";
 import { readFile } from "fs-extra";
@@ -25,7 +26,9 @@ import { QueryMetadata, SortDirection } from "./pure/interface-types";
 import { Logger, ProgressReporter } from "./common";
 import { CompilationMessage } from "./pure/legacy-messages";
 import { sarifParser } from "./sarif-parser";
-import { dbSchemeToLanguage, walkDirectory } from "./helpers";
+import { walkDirectory } from "./helpers";
+import { App } from "./common/app";
+import { QueryLanguage } from "./common/query-language";
 
 /**
  * The version of the SARIF format that we are using.
@@ -122,14 +125,6 @@ export interface SourceInfo {
 export type ResolvedTests = string[];
 
 /**
- * Options for `codeql test run`.
- */
-export interface TestRunOptions {
-  cancellationToken?: CancellationToken;
-  logger?: Logger;
-}
-
-/**
  * Event fired by `codeql test run`.
  */
 export interface TestCompleted {
@@ -155,6 +150,10 @@ interface BqrsDecodeOptions {
   /** The entity names to retrieve from the bqrs file. Default is url, string */
   entities?: string[];
 }
+
+export type OnLineCallback = (
+  line: string,
+) => Promise<string | undefined> | string | undefined;
 
 /**
  * This class manages a cli server started by `codeql execute cli-server` to
@@ -191,6 +190,7 @@ export class CodeQLCliServer implements Disposable {
   public quiet = false;
 
   constructor(
+    private readonly app: App,
     private distributionProvider: DistributionProvider,
     private cliConfig: CliConfig,
     private logger: Logger,
@@ -288,7 +288,7 @@ export class CodeQLCliServer implements Disposable {
       );
     }
 
-    return await spawnServer(
+    return spawnServer(
       codeQlPath,
       "CodeQL CLI Server",
       ["execute", "cli-server"],
@@ -304,6 +304,7 @@ export class CodeQLCliServer implements Disposable {
     command: string[],
     commandArgs: string[],
     description: string,
+    onLine?: OnLineCallback,
   ): Promise<string> {
     const stderrBuffers: Buffer[] = [];
     if (this.commandInProcess) {
@@ -328,6 +329,22 @@ export class CodeQLCliServer implements Disposable {
         await new Promise<void>((resolve, reject) => {
           // Start listening to stdout
           process.stdout.addListener("data", (newData: Buffer) => {
+            if (onLine) {
+              void (async () => {
+                const response = await onLine(newData.toString("utf-8"));
+
+                if (!response) {
+                  return;
+                }
+
+                process.stdin.write(`${response}${EOL}`);
+
+                // Remove newData from stdoutBuffers because the data has been consumed
+                // by the onLine callback.
+                stdoutBuffers.splice(stdoutBuffers.indexOf(newData), 1);
+              })();
+            }
+
             stdoutBuffers.push(newData);
             // If the buffer ends in '0' then exit.
             // We don't have to check the middle as no output will be written after the null until
@@ -360,7 +377,7 @@ export class CodeQLCliServer implements Disposable {
         this.killProcessIfRunning();
         // Report the error (if there is a stderr then use that otherwise just report the error cod or nodejs error)
         const newError =
-          stderrBuffers.length == 0
+          stderrBuffers.length === 0
             ? new Error(`${description} failed: ${err}`)
             : new Error(
                 `${description} failed: ${Buffer.concat(stderrBuffers).toString(
@@ -431,7 +448,7 @@ export class CodeQLCliServer implements Disposable {
         void logStream(child.stderr!, logger);
       }
 
-      for await (const event of await splitStreamAtSeparators(child.stdout!, [
+      for await (const event of splitStreamAtSeparators(child.stdout!, [
         "\0",
       ])) {
         yield event;
@@ -460,10 +477,15 @@ export class CodeQLCliServer implements Disposable {
     command: string[],
     commandArgs: string[],
     description: string,
-    cancellationToken?: CancellationToken,
-    logger?: Logger,
+    {
+      cancellationToken,
+      logger,
+    }: {
+      cancellationToken?: CancellationToken;
+      logger?: Logger;
+    } = {},
   ): AsyncGenerator<EventType, void, unknown> {
-    for await (const event of await this.runAsyncCodeQlCliCommandInternal(
+    for await (const event of this.runAsyncCodeQlCliCommandInternal(
       command,
       commandArgs,
       cancellationToken,
@@ -487,13 +509,20 @@ export class CodeQLCliServer implements Disposable {
    * @param commandArgs The arguments to pass to the `codeql` command.
    * @param description Description of the action being run, to be shown in log and error messages.
    * @param progressReporter Used to output progress messages, e.g. to the status bar.
+   * @param onLine Used for responding to interactive output on stdout/stdin.
    * @returns The contents of the command's stdout, if the command succeeded.
    */
   runCodeQlCliCommand(
     command: string[],
     commandArgs: string[],
     description: string,
-    progressReporter?: ProgressReporter,
+    {
+      progressReporter,
+      onLine,
+    }: {
+      progressReporter?: ProgressReporter;
+      onLine?: OnLineCallback;
+    } = {},
   ): Promise<string> {
     if (progressReporter) {
       progressReporter.report({ message: description });
@@ -503,10 +532,12 @@ export class CodeQLCliServer implements Disposable {
       // Construct the command that actually does the work
       const callback = (): void => {
         try {
-          this.runCodeQlCliInternal(command, commandArgs, description).then(
-            resolve,
-            reject,
-          );
+          this.runCodeQlCliInternal(
+            command,
+            commandArgs,
+            description,
+            onLine,
+          ).then(resolve, reject);
         } catch (err) {
           reject(err);
         }
@@ -522,32 +553,38 @@ export class CodeQLCliServer implements Disposable {
   }
 
   /**
-   * Runs a CodeQL CLI command, returning the output as JSON.
+   * Runs a CodeQL CLI command, parsing the output as JSON.
    * @param command The `codeql` command to be run, provided as an array of command/subcommand names.
    * @param commandArgs The arguments to pass to the `codeql` command.
    * @param description Description of the action being run, to be shown in log and error messages.
    * @param addFormat Whether or not to add commandline arguments to specify the format as JSON.
    * @param progressReporter Used to output progress messages, e.g. to the status bar.
+   * @param onLine Used for responding to interactive output on stdout/stdin.
    * @returns The contents of the command's stdout, if the command succeeded.
    */
   async runJsonCodeQlCliCommand<OutputType>(
     command: string[],
     commandArgs: string[],
     description: string,
-    addFormat = true,
-    progressReporter?: ProgressReporter,
+    {
+      addFormat = true,
+      progressReporter,
+      onLine,
+    }: {
+      addFormat?: boolean;
+      progressReporter?: ProgressReporter;
+      onLine?: OnLineCallback;
+    } = {},
   ): Promise<OutputType> {
     let args: string[] = [];
     if (addFormat)
       // Add format argument first, in case commandArgs contains positional parameters.
       args = args.concat(["--format", "json"]);
     args = args.concat(commandArgs);
-    const result = await this.runCodeQlCliCommand(
-      command,
-      args,
-      description,
+    const result = await this.runCodeQlCliCommand(command, args, description, {
       progressReporter,
-    );
+      onLine,
+    });
     try {
       return JSON.parse(result) as OutputType;
     } catch (err) {
@@ -557,6 +594,72 @@ export class CodeQLCliServer implements Disposable {
         }`,
       );
     }
+  }
+
+  /**
+   * Runs a CodeQL CLI command with authentication, parsing the output as JSON.
+   *
+   * This method is intended for use with commands that accept a `--github-auth-stdin` argument. This
+   * will be added to the command line arguments automatically if an access token is available.
+   *
+   * When the argument is given to the command, the CLI server will prompt for the access token on
+   * stdin. This method will automatically respond to the prompt with the access token.
+   *
+   * There are a few race conditions that can potentially happen:
+   * 1. The user logs in after the command has started. In this case, no access token will be given.
+   * 2. The user logs out after the command has started. In this case, the user will be prompted
+   *   to login again. If they cancel the login, the old access token that was present before the
+   *   command was started will be used.
+   *
+   * @param command The `codeql` command to be run, provided as an array of command/subcommand names.
+   * @param commandArgs The arguments to pass to the `codeql` command.
+   * @param description Description of the action being run, to be shown in log and error messages.
+   * @param addFormat Whether or not to add commandline arguments to specify the format as JSON.
+   * @param progressReporter Used to output progress messages, e.g. to the status bar.
+   * @returns The contents of the command's stdout, if the command succeeded.
+   */
+  async runJsonCodeQlCliCommandWithAuthentication<OutputType>(
+    command: string[],
+    commandArgs: string[],
+    description: string,
+    {
+      addFormat,
+      progressReporter,
+    }: {
+      addFormat?: boolean;
+      progressReporter?: ProgressReporter;
+    } = {},
+  ): Promise<OutputType> {
+    const accessToken = await this.app.credentials.getExistingAccessToken();
+
+    const extraArgs = accessToken ? ["--github-auth-stdin"] : [];
+
+    return this.runJsonCodeQlCliCommand(
+      command,
+      [...extraArgs, ...commandArgs],
+      description,
+      {
+        addFormat,
+        progressReporter,
+        onLine: async (line) => {
+          if (line.startsWith("Enter value for --github-auth-stdin")) {
+            try {
+              return await this.app.credentials.getAccessToken();
+            } catch (e) {
+              // If the user cancels the authentication prompt, we still need to give a value to the CLI.
+              // By giving a potentially invalid value, the user will just get a 401/403 when they try to access a
+              // private package and the access token is invalid.
+              // This code path is very rare to hit. It would only be hit if the user is logged in when
+              // starting the command, then logging out before the getAccessToken() is called again and
+              // then cancelling the authentication prompt.
+              return accessToken;
+            }
+          }
+
+          return undefined;
+        },
+      },
+    );
   }
 
   /**
@@ -623,7 +726,9 @@ export class CodeQLCliServer implements Disposable {
       ["resolve", "qlref"],
       subcommandArgs,
       "Resolving qlref",
-      false,
+      {
+        addFormat: false,
+      },
     );
   }
 
@@ -651,7 +756,13 @@ export class CodeQLCliServer implements Disposable {
   public async *runTests(
     testPaths: string[],
     workspaces: string[],
-    options: TestRunOptions,
+    {
+      cancellationToken,
+      logger,
+    }: {
+      cancellationToken?: CancellationToken;
+      logger?: Logger;
+    },
   ): AsyncGenerator<TestCompleted, void, unknown> {
     const subcommandArgs = this.cliConfig.additionalTestArguments.concat([
       ...this.getAdditionalPacksArg(workspaces),
@@ -660,12 +771,14 @@ export class CodeQLCliServer implements Disposable {
       ...testPaths,
     ]);
 
-    for await (const event of await this.runAsyncCodeQlCliCommand<TestCompleted>(
+    for await (const event of this.runAsyncCodeQlCliCommand<TestCompleted>(
       ["test", "run"],
       subcommandArgs,
       "Run CodeQL Tests",
-      options.cancellationToken,
-      options.logger,
+      {
+        cancellationToken,
+        logger,
+      },
     )) {
       yield event;
     }
@@ -696,7 +809,9 @@ export class CodeQLCliServer implements Disposable {
       ["resolve", "ml-models"],
       args,
       "Resolving ML models",
-      false,
+      {
+        addFormat: false,
+      },
     );
   }
 
@@ -720,8 +835,9 @@ export class CodeQLCliServer implements Disposable {
       ["resolve", "ram"],
       args,
       "Resolving RAM settings",
-      true,
-      progressReporter,
+      {
+        progressReporter,
+      },
     );
   }
   /**
@@ -1034,10 +1150,7 @@ export class CodeQLCliServer implements Disposable {
     ];
     if (targetDbScheme) {
       args.push("--target-dbscheme", targetDbScheme);
-      if (
-        allowDowngradesIfPossible &&
-        (await this.cliConstraints.supportsDowngrades())
-      ) {
+      if (allowDowngradesIfPossible) {
         args.push("--allow-downgrades");
       }
     }
@@ -1091,9 +1204,11 @@ export class CodeQLCliServer implements Disposable {
    */
   public async getSupportedLanguages(): Promise<string[]> {
     if (!this._supportedLanguages) {
-      // Get the intersection of resolveLanguages with the list of hardcoded languages in dbSchemeToLanguage.
+      // Get the intersection of resolveLanguages with the list of languages in QueryLanguage.
       const resolvedLanguages = Object.keys(await this.resolveLanguages());
-      const hardcodedLanguages = Object.values(dbSchemeToLanguage);
+      const hardcodedLanguages = Object.values(QueryLanguage).map((s) =>
+        s.toString(),
+      );
 
       this._supportedLanguages = resolvedLanguages.filter((lang) =>
         hardcodedLanguages.includes(lang),
@@ -1119,10 +1234,8 @@ export class CodeQLCliServer implements Disposable {
     if (searchPath !== undefined) {
       args.push("--search-path", join(...searchPath));
     }
-    if (await this.cliConstraints.supportsAllowLibraryPacksInResolveQueries()) {
-      // All of our usage of `codeql resolve queries` needs to handle library packs.
-      args.push("--allow-library-packs");
-    }
+    // All of our usage of `codeql resolve queries` needs to handle library packs.
+    args.push("--allow-library-packs");
     args.push(suite);
     return this.runJsonCodeQlCliCommand<string[]>(
       ["resolve", "queries"],
@@ -1132,11 +1245,31 @@ export class CodeQLCliServer implements Disposable {
   }
 
   /**
+   * Adds a core language QL library pack for the given query language as a dependency
+   * of the current package, and then installs them. This command modifies the qlpack.yml
+   * file of the current package. Formatting and comments will be removed.
+   * @param dir The directory where QL pack exists.
+   * @param language The language of the QL pack.
+   */
+  async packAdd(dir: string, queryLanguage: QueryLanguage) {
+    const args = ["--dir", dir];
+    args.push(`codeql/${queryLanguage}-all`);
+    return this.runJsonCodeQlCliCommandWithAuthentication(
+      ["pack", "add"],
+      args,
+      `Adding and installing ${queryLanguage} pack dependency.`,
+      {
+        addFormat: false,
+      },
+    );
+  }
+
+  /**
    * Downloads a specified pack.
    * @param packs The `<package-scope/name[@version]>` of the packs to download.
    */
   async packDownload(packs: string[]) {
-    return this.runJsonCodeQlCliCommand(
+    return this.runJsonCodeQlCliCommandWithAuthentication(
       ["pack", "download"],
       packs,
       "Downloading packs",
@@ -1148,7 +1281,7 @@ export class CodeQLCliServer implements Disposable {
     if (forceUpdate) {
       args.push("--mode", "update");
     }
-    return this.runJsonCodeQlCliCommand(
+    return this.runJsonCodeQlCliCommandWithAuthentication(
       ["pack", "install"],
       args,
       "Installing pack dependencies",
@@ -1169,7 +1302,7 @@ export class CodeQLCliServer implements Disposable {
       ...this.getAdditionalPacksArg(workspaceFolders),
     ];
 
-    return this.runJsonCodeQlCliCommand(
+    return this.runJsonCodeQlCliCommandWithAuthentication(
       ["pack", "bundle"],
       args,
       "Bundling pack",
@@ -1200,7 +1333,7 @@ export class CodeQLCliServer implements Disposable {
   ): Promise<{ [pack: string]: string }> {
     // Uses the default `--mode use-lock`, which creates the lock file if it doesn't exist.
     const results: { [pack: string]: string } =
-      await this.runJsonCodeQlCliCommand(
+      await this.runJsonCodeQlCliCommandWithAuthentication(
         ["pack", "resolve-dependencies"],
         [dir],
         "Resolving pack dependencies",
@@ -1209,12 +1342,9 @@ export class CodeQLCliServer implements Disposable {
   }
 
   async generateDil(qloFile: string, outFile: string): Promise<void> {
-    const extraArgs = (await this.cliConstraints.supportsDecompileDil())
-      ? ["--kind", "dil", "-o", outFile, qloFile]
-      : ["-o", outFile, qloFile];
     await this.runCodeQlCliCommand(
       ["query", "decompile"],
-      extraArgs,
+      ["--kind", "dil", "-o", outFile, qloFile],
       "Generating DIL",
     );
   }
@@ -1461,7 +1591,7 @@ const lineEndings = ["\r\n", "\r", "\n"];
  * @param logger The logger that will consume the stream output.
  */
 async function logStream(stream: Readable, logger: Logger): Promise<void> {
-  for await (const line of await splitStreamAtSeparators(stream, lineEndings)) {
+  for await (const line of splitStreamAtSeparators(stream, lineEndings)) {
     // Await the result of log here in order to ensure the logs are written in the correct order.
     await logger.log(line);
   }
@@ -1493,56 +1623,6 @@ export function shouldDebugCliServer() {
 
 export class CliVersionConstraint {
   /**
-   * CLI version where --kind=DIL was introduced
-   */
-  public static CLI_VERSION_WITH_DECOMPILE_KIND_DIL = new SemVer("2.3.0");
-
-  /**
-   * CLI version where languages are exposed during a `codeql resolve database` command.
-   */
-  public static CLI_VERSION_WITH_LANGUAGE = new SemVer("2.4.1");
-
-  public static CLI_VERSION_WITH_NONDESTURCTIVE_UPGRADES = new SemVer("2.4.2");
-
-  /**
-   * CLI version where `codeql resolve upgrades` supports
-   * the `--allow-downgrades` flag
-   */
-  public static CLI_VERSION_WITH_DOWNGRADES = new SemVer("2.4.4");
-
-  /**
-   * CLI version where the `codeql resolve qlref` command is available.
-   */
-  public static CLI_VERSION_WITH_RESOLVE_QLREF = new SemVer("2.5.1");
-
-  /**
-   * CLI version where database registration was introduced
-   */
-  public static CLI_VERSION_WITH_DB_REGISTRATION = new SemVer("2.4.1");
-
-  /**
-   * CLI version where the `--allow-library-packs` option to `codeql resolve queries` was
-   * introduced.
-   */
-  public static CLI_VERSION_WITH_ALLOW_LIBRARY_PACKS_IN_RESOLVE_QUERIES =
-    new SemVer("2.6.1");
-
-  /**
-   * CLI version where the `database unbundle` subcommand was introduced.
-   */
-  public static CLI_VERSION_WITH_DATABASE_UNBUNDLE = new SemVer("2.6.0");
-
-  /**
-   * CLI version where the `--no-precompile` option for pack creation was introduced.
-   */
-  public static CLI_VERSION_WITH_NO_PRECOMPILE = new SemVer("2.7.1");
-
-  /**
-   * CLI version where remote queries (variant analysis) are supported.
-   */
-  public static CLI_VERSION_REMOTE_QUERIES = new SemVer("2.6.3");
-
-  /**
    * CLI version where building QLX packs for remote queries is supported.
    * (The options were _accepted_ by a few earlier versions, but only from
    * 2.11.3 will it actually use the existing compilation cache correctly).
@@ -1550,26 +1630,11 @@ export class CliVersionConstraint {
   public static CLI_VERSION_QLX_REMOTE = new SemVer("2.11.3");
 
   /**
-   * CLI version where the `resolve ml-models` subcommand was introduced.
-   */
-  public static CLI_VERSION_WITH_RESOLVE_ML_MODELS = new SemVer("2.7.3");
-
-  /**
    * CLI version where the `resolve ml-models` subcommand was enhanced to work with packaging.
    */
   public static CLI_VERSION_WITH_PRECISE_RESOLVE_ML_MODELS = new SemVer(
     "2.10.0",
   );
-
-  /**
-   * CLI version where the `--old-eval-stats` option to the query server was introduced.
-   */
-  public static CLI_VERSION_WITH_OLD_EVAL_STATS = new SemVer("2.7.4");
-
-  /**
-   * CLI version where packaging was introduced.
-   */
-  public static CLI_VERSION_WITH_PACKAGING = new SemVer("2.6.0");
 
   /**
    * CLI version where the `--evaluator-log` and related options to the query server were introduced,
@@ -1611,91 +1676,13 @@ export class CliVersionConstraint {
     return (await this.cli.getVersion()).compare(v) >= 0;
   }
 
-  public async supportsDecompileDil() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_DECOMPILE_KIND_DIL,
-    );
-  }
-
-  public async supportsLanguageName() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_LANGUAGE,
-    );
-  }
-
-  public async supportsNonDestructiveUpgrades() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_NONDESTURCTIVE_UPGRADES,
-    );
-  }
-
-  public async supportsDowngrades() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_DOWNGRADES,
-    );
-  }
-
-  public async supportsResolveQlref() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_RESOLVE_QLREF,
-    );
-  }
-
-  public async supportsAllowLibraryPacksInResolveQueries() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_ALLOW_LIBRARY_PACKS_IN_RESOLVE_QUERIES,
-    );
-  }
-
-  async supportsDatabaseRegistration() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_DB_REGISTRATION,
-    );
-  }
-
-  async supportsDatabaseUnbundle() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_DATABASE_UNBUNDLE,
-    );
-  }
-
-  async supportsNoPrecompile() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_NO_PRECOMPILE,
-    );
-  }
-
-  async supportsRemoteQueries() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_REMOTE_QUERIES,
-    );
-  }
-
   async supportsQlxRemote() {
     return this.isVersionAtLeast(CliVersionConstraint.CLI_VERSION_QLX_REMOTE);
-  }
-
-  async supportsResolveMlModels() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_RESOLVE_ML_MODELS,
-    );
   }
 
   async supportsPreciseResolveMlModels() {
     return this.isVersionAtLeast(
       CliVersionConstraint.CLI_VERSION_WITH_PRECISE_RESOLVE_ML_MODELS,
-    );
-  }
-
-  async supportsOldEvalStats() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_OLD_EVAL_STATS,
-    );
-  }
-
-  async supportsPackaging() {
-    return this.isVersionAtLeast(
-      CliVersionConstraint.CLI_VERSION_WITH_PACKAGING,
     );
   }
 

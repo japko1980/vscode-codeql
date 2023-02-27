@@ -15,7 +15,7 @@ import {
   ThemeColor,
 } from "vscode";
 import { tryGetResolvableLocation, isLineColumnLoc } from "./pure/bqrs-utils";
-import { DatabaseItem, DatabaseManager } from "./databases";
+import { DatabaseItem, DatabaseManager } from "./local-databases";
 import { ViewSourceFileMsg } from "./pure/interface-types";
 import { Logger } from "./common";
 import {
@@ -109,11 +109,7 @@ export function tryResolveLocation(
   }
 }
 
-export type WebviewView =
-  | "results"
-  | "compare"
-  | "remote-queries"
-  | "variant-analysis";
+export type WebviewView = "results" | "compare" | "variant-analysis";
 
 export interface WebviewMessage {
   t: string;

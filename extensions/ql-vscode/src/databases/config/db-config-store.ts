@@ -1,8 +1,10 @@
 import { pathExists, outputJSON, readJSON, readJSONSync } from "fs-extra";
 import { join } from "path";
 import {
+  clearLocalDbConfig,
   cloneDbConfig,
   DbConfig,
+  initializeLocalDbConfig,
   removeLocalDb,
   removeLocalList,
   removeRemoteList,
@@ -12,6 +14,8 @@ import {
   renameLocalList,
   renameRemoteList,
   SelectedDbItem,
+  DB_CONFIG_VERSION,
+  SelectedDbItemKind,
 } from "./db-config";
 import * as chokidar from "chokidar";
 import { DisposableObject, DisposeHandler } from "../../pure/disposable-object";
@@ -26,12 +30,14 @@ import { ValueResult } from "../../common/value-result";
 import {
   LocalDatabaseDbItem,
   LocalListDbItem,
-  VariantAnalysisUserDefinedListDbItem,
+  RemoteUserDefinedListDbItem,
   DbItem,
   DbItemKind,
 } from "../db-item";
 
 export class DbConfigStore extends DisposableObject {
+  public static readonly databaseConfigFileName = "databases.json";
+
   public readonly onDidChangeConfig: AppEvent<void>;
   private readonly onDidChangeConfigEventEmitter: AppEventEmitter<void>;
 
@@ -49,7 +55,7 @@ export class DbConfigStore extends DisposableObject {
     super();
 
     const storagePath = app.workspaceStoragePath || app.globalStoragePath;
-    this.configPath = join(storagePath, "workspace-databases.json");
+    this.configPath = join(storagePath, DbConfigStore.databaseConfigFileName);
 
     this.config = this.createEmptyConfig();
     this.configErrors = [];
@@ -111,7 +117,7 @@ export class DbConfigStore extends DisposableObject {
       case DbItemKind.LocalList:
         config = removeLocalList(this.config, dbItem.listName);
         break;
-      case DbItemKind.VariantAnalysisUserDefinedList:
+      case DbItemKind.RemoteUserDefinedList:
         config = removeRemoteList(this.config, dbItem.listName);
         break;
       case DbItemKind.LocalDatabase:
@@ -144,16 +150,16 @@ export class DbConfigStore extends DisposableObject {
     parentList?: string,
   ): Promise<void> {
     if (!this.config) {
-      throw Error("Cannot add remote repo if config is not loaded");
+      throw Error("Cannot add variant analysis repo if config is not loaded");
     }
 
     if (repoNwo === "") {
       throw Error("Repository name cannot be empty");
     }
 
-    if (this.doesRemoteDbExist(repoNwo)) {
+    if (this.doesRemoteDbExist(repoNwo, parentList)) {
       throw Error(
-        `A remote repository with the name '${repoNwo}' already exists`,
+        `A variant analysis repository with the name '${repoNwo}' already exists`,
       );
     }
 
@@ -175,7 +181,7 @@ export class DbConfigStore extends DisposableObject {
 
   public async addRemoteOwner(owner: string): Promise<void> {
     if (!this.config) {
-      throw Error("Cannot add remote owner if config is not loaded");
+      throw Error("Cannot add owner if config is not loaded");
     }
 
     if (owner === "") {
@@ -183,7 +189,7 @@ export class DbConfigStore extends DisposableObject {
     }
 
     if (this.doesRemoteOwnerExist(owner)) {
-      throw Error(`A remote owner with the name '${owner}' already exists`);
+      throw Error(`An owner with the name '${owner}' already exists`);
     }
 
     const config = cloneDbConfig(this.config);
@@ -210,7 +216,7 @@ export class DbConfigStore extends DisposableObject {
 
   public async addRemoteList(listName: string): Promise<void> {
     if (!this.config) {
-      throw Error("Cannot add remote list if config is not loaded");
+      throw Error("Cannot add variant analysis list if config is not loaded");
     }
 
     this.validateRemoteListName(listName);
@@ -244,11 +250,13 @@ export class DbConfigStore extends DisposableObject {
   }
 
   public async renameRemoteList(
-    currentDbItem: VariantAnalysisUserDefinedListDbItem,
+    currentDbItem: RemoteUserDefinedListDbItem,
     newName: string,
   ) {
     if (!this.config) {
-      throw Error("Cannot rename remote list if config is not loaded");
+      throw Error(
+        "Cannot rename variant analysis list if config is not loaded",
+      );
     }
 
     this.validateRemoteListName(newName);
@@ -285,7 +293,9 @@ export class DbConfigStore extends DisposableObject {
 
   public doesRemoteListExist(listName: string): boolean {
     if (!this.config) {
-      throw Error("Cannot check remote list existence if config is not loaded");
+      throw Error(
+        "Cannot check variant analysis list existence if config is not loaded",
+      );
     }
 
     return this.config.databases.variantAnalysis.repositoryLists.some(
@@ -304,7 +314,7 @@ export class DbConfigStore extends DisposableObject {
   public doesLocalDbExist(dbName: string, listName?: string): boolean {
     if (!this.config) {
       throw Error(
-        "Cannot check remote database existence if config is not loaded",
+        "Cannot check variant analysis repository existence if config is not loaded",
       );
     }
 
@@ -321,7 +331,7 @@ export class DbConfigStore extends DisposableObject {
   public doesRemoteDbExist(dbName: string, listName?: string): boolean {
     if (!this.config) {
       throw Error(
-        "Cannot check remote database existence if config is not loaded",
+        "Cannot check variant analysis repository existence if config is not loaded",
       );
     }
 
@@ -336,15 +346,14 @@ export class DbConfigStore extends DisposableObject {
 
   public doesRemoteOwnerExist(owner: string): boolean {
     if (!this.config) {
-      throw Error(
-        "Cannot check remote owner existence if config is not loaded",
-      );
+      throw Error("Cannot check owner existence if config is not loaded");
     }
 
     return this.config.databases.variantAnalysis.owners.includes(owner);
   }
 
   private async writeConfig(config: DbConfig): Promise<void> {
+    clearLocalDbConfig(config);
     await outputJSON(this.configPath, config, {
       spaces: 2,
     });
@@ -376,6 +385,7 @@ export class DbConfigStore extends DisposableObject {
     }
 
     if (newConfig) {
+      initializeLocalDbConfig(newConfig);
       this.configErrors = this.configValidator.validate(newConfig);
     }
 
@@ -410,6 +420,7 @@ export class DbConfigStore extends DisposableObject {
     }
 
     if (newConfig) {
+      initializeLocalDbConfig(newConfig);
       this.configErrors = this.configValidator.validate(newConfig);
     }
 
@@ -450,6 +461,7 @@ export class DbConfigStore extends DisposableObject {
 
   private createEmptyConfig(): DbConfig {
     return {
+      version: DB_CONFIG_VERSION,
       databases: {
         variantAnalysis: {
           repositoryLists: [],
@@ -460,6 +472,10 @@ export class DbConfigStore extends DisposableObject {
           lists: [],
           databases: [],
         },
+      },
+      selected: {
+        kind: SelectedDbItemKind.VariantAnalysisSystemDefinedList,
+        listName: "top_10",
       },
     };
   }
@@ -480,7 +496,9 @@ export class DbConfigStore extends DisposableObject {
     }
 
     if (this.doesRemoteListExist(listName)) {
-      throw Error(`A remote list with the name '${listName}' already exists`);
+      throw Error(
+        `A variant analysis list with the name '${listName}' already exists`,
+      );
     }
   }
 

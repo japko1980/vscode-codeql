@@ -9,6 +9,8 @@ import {
   SecretStorageChangeEvent,
   Uri,
   window,
+  workspace,
+  WorkspaceFolder,
 } from "vscode";
 import { dump } from "js-yaml";
 import * as tmp from "tmp";
@@ -19,6 +21,7 @@ import { DirResult } from "tmp";
 import {
   getInitialQueryContents,
   InvocationRateLimiter,
+  isFolderAlreadyInWorkspace,
   isLikelyDatabaseRoot,
   isLikelyDbLanguageFolder,
   showBinaryChoiceDialog,
@@ -27,6 +30,7 @@ import {
   walkDirectory,
 } from "../../../src/helpers";
 import { reportStreamProgress } from "../../../src/commandRunner";
+import { QueryLanguage } from "../../../src/common/query-language";
 
 describe("helpers", () => {
   describe("Invocation rate limiter", () => {
@@ -143,10 +147,14 @@ describe("helpers", () => {
 
   describe("codeql-database.yml tests", () => {
     let dir: tmp.DirResult;
+    let language: QueryLanguage;
+
     beforeEach(() => {
       dir = tmp.dirSync();
+      language = QueryLanguage.Cpp;
+
       const contents = dump({
-        primaryLanguage: "cpp",
+        primaryLanguage: language,
       });
       writeFileSync(join(dir.name, "codeql-database.yml"), contents, "utf8");
     });
@@ -156,7 +164,7 @@ describe("helpers", () => {
     });
 
     it("should get initial query contents when language is known", () => {
-      expect(getInitialQueryContents("cpp", "hucairz")).toBe(
+      expect(getInitialQueryContents(language, "hucairz")).toBe(
         'import cpp\n\nselect ""',
       );
     });
@@ -531,5 +539,23 @@ describe("walkDirectory", () => {
 
     // Only real files should be returned.
     expect(files.sort()).toEqual([file1, file2, file3, file4, file5, file6]);
+  });
+});
+
+describe("isFolderAlreadyInWorkspace", () => {
+  beforeEach(() => {
+    const folders = [
+      { name: "/first/path" },
+      { name: "/second/path" },
+    ] as WorkspaceFolder[];
+
+    jest.spyOn(workspace, "workspaceFolders", "get").mockReturnValue(folders);
+  });
+  it("should return true if the folder is already in the workspace", () => {
+    expect(isFolderAlreadyInWorkspace("/first/path")).toBe(true);
+  });
+
+  it("should return false if the folder is not in the workspace", () => {
+    expect(isFolderAlreadyInWorkspace("/third/path")).toBe(false);
   });
 });

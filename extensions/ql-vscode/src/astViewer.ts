@@ -15,7 +15,7 @@ import {
 } from "vscode";
 import { basename } from "path";
 
-import { DatabaseItem } from "./databases";
+import { DatabaseItem } from "./local-databases";
 import { UrlValue, BqrsId } from "./pure/bqrs-cli-types";
 import { showLocation } from "./interface-utils";
 import {
@@ -25,7 +25,9 @@ import {
 } from "./pure/bqrs-utils";
 import { commandRunner } from "./commandRunner";
 import { DisposableObject } from "./pure/disposable-object";
-import { showAndLogErrorMessage } from "./helpers";
+import { showAndLogExceptionWithTelemetry } from "./helpers";
+import { asError, getErrorMessage } from "./pure/helpers-pure";
+import { redactableError } from "./pure/errors";
 
 export interface AstItem {
   id: BqrsId;
@@ -146,7 +148,12 @@ export class AstViewer extends DisposableObject {
       () => {
         /**/
       },
-      (err) => showAndLogErrorMessage(err),
+      (error: unknown) =>
+        showAndLogExceptionWithTelemetry(
+          redactableError(
+            asError(error),
+          )`Failed to reveal AST: ${getErrorMessage(error)}`,
+        ),
     );
   }
 
@@ -204,7 +211,12 @@ export class AstViewer extends DisposableObject {
           () => {
             /**/
           },
-          (err) => showAndLogErrorMessage(err),
+          (error: unknown) =>
+            showAndLogExceptionWithTelemetry(
+              redactableError(
+                asError(error),
+              )`Failed to reveal AST: ${getErrorMessage(error)}`,
+            ),
         );
       }
     }

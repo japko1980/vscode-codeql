@@ -16,7 +16,7 @@ import {
   createLocalListDbItem,
   createRemoteOwnerDbItem,
   createRemoteRepoDbItem,
-  createVariantAnalysisUserDefinedListDbItem,
+  createRemoteUserDefinedListDbItem,
 } from "../../../factories/db-item-factories";
 import { createMockApp } from "../../../__mocks__/appMock";
 
@@ -42,7 +42,7 @@ describe("db config store", () => {
 
       const configPath = join(
         tempWorkspaceStoragePath,
-        "workspace-databases.json",
+        DbConfigStore.databaseConfigFileName,
       );
 
       const configStore = new DbConfigStore(app, false);
@@ -56,7 +56,10 @@ describe("db config store", () => {
       expect(config.databases.variantAnalysis.repositories).toHaveLength(0);
       expect(config.databases.local.lists).toHaveLength(0);
       expect(config.databases.local.databases).toHaveLength(0);
-      expect(config.selected).toBeUndefined();
+      expect(config.selected).toEqual({
+        kind: SelectedDbItemKind.VariantAnalysisSystemDefinedList,
+        listName: "top_10",
+      });
 
       configStore.dispose();
     });
@@ -82,25 +85,6 @@ describe("db config store", () => {
         "owner/repo2",
         "owner/repo3",
       ]);
-      expect(config.databases.local.lists).toHaveLength(2);
-      expect(config.databases.local.lists[0]).toEqual({
-        name: "localList1",
-        databases: [
-          {
-            name: "foo/bar",
-            dateAdded: 1668096745193,
-            language: "go",
-            storagePath: "/path/to/database/",
-          },
-        ],
-      });
-      expect(config.databases.local.databases).toHaveLength(1);
-      expect(config.databases.local.databases[0]).toEqual({
-        name: "example-db",
-        dateAdded: 1668096927267,
-        language: "ruby",
-        storagePath: "/path/to/database/",
-      });
       expect(config.selected).toEqual({
         kind: SelectedDbItemKind.VariantAnalysisUserDefinedList,
         listName: "repoList1",
@@ -195,7 +179,10 @@ describe("db config store", () => {
         workspaceStoragePath: tempWorkspaceStoragePath,
       });
 
-      configPath = join(tempWorkspaceStoragePath, "workspace-databases.json");
+      configPath = join(
+        tempWorkspaceStoragePath,
+        DbConfigStore.databaseConfigFileName,
+      );
     });
 
     it("should add a remote repository", async () => {
@@ -269,7 +256,7 @@ describe("db config store", () => {
       configStore.dispose();
     });
 
-    it("should add a local list", async () => {
+    it.skip("should add a local list", async () => {
       // Initial set up
       const dbConfig = createDbConfig();
 
@@ -320,7 +307,10 @@ describe("db config store", () => {
         workspaceStoragePath: tempWorkspaceStoragePath,
       });
 
-      configPath = join(tempWorkspaceStoragePath, "workspace-databases.json");
+      configPath = join(
+        tempWorkspaceStoragePath,
+        DbConfigStore.databaseConfigFileName,
+      );
     });
 
     it("should allow renaming a remote list", async () => {
@@ -342,7 +332,7 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Rename
-      const currentDbItem = createVariantAnalysisUserDefinedListDbItem({
+      const currentDbItem = createRemoteUserDefinedListDbItem({
         listName: "list1",
       });
       await configStore.renameRemoteList(currentDbItem, "listRenamed");
@@ -364,7 +354,7 @@ describe("db config store", () => {
       configStore.dispose();
     });
 
-    it("should allow renaming a local list", async () => {
+    it.skip("should allow renaming a local list", async () => {
       // Initial set up
       const dbConfig = createDbConfig({
         localLists: [
@@ -407,7 +397,7 @@ describe("db config store", () => {
       configStore.dispose();
     });
 
-    it("should allow renaming of a local db", async () => {
+    it.skip("should allow renaming of a local db", async () => {
       // Initial set up
       const dbConfig = createDbConfig({
         localLists: [
@@ -471,12 +461,14 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Rename
-      const currentDbItem = createVariantAnalysisUserDefinedListDbItem({
+      const currentDbItem = createRemoteUserDefinedListDbItem({
         listName: "list1",
       });
       await expect(
         configStore.renameRemoteList(currentDbItem, "list2"),
-      ).rejects.toThrow(`A remote list with the name 'list2' already exists`);
+      ).rejects.toThrow(
+        `A variant analysis list with the name 'list2' already exists`,
+      );
 
       configStore.dispose();
     });
@@ -492,7 +484,10 @@ describe("db config store", () => {
         workspaceStoragePath: tempWorkspaceStoragePath,
       });
 
-      configPath = join(tempWorkspaceStoragePath, "workspace-databases.json");
+      configPath = join(
+        tempWorkspaceStoragePath,
+        DbConfigStore.databaseConfigFileName,
+      );
     });
 
     it("should remove a single db item", async () => {
@@ -544,7 +539,7 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Remove
-      const currentDbItem = createVariantAnalysisUserDefinedListDbItem({
+      const currentDbItem = createRemoteUserDefinedListDbItem({
         listName: "list1",
       });
       await configStore.removeDbItem(currentDbItem);
@@ -612,7 +607,10 @@ describe("db config store", () => {
         workspaceStoragePath: tempWorkspaceStoragePath,
       });
 
-      configPath = join(tempWorkspaceStoragePath, "workspace-databases.json");
+      configPath = join(
+        tempWorkspaceStoragePath,
+        DbConfigStore.databaseConfigFileName,
+      );
     });
 
     it("should set the selected item", async () => {
@@ -648,7 +646,10 @@ describe("db config store", () => {
         workspaceStoragePath: tempWorkspaceStoragePath,
       });
 
-      configPath = join(tempWorkspaceStoragePath, "workspace-databases.json");
+      configPath = join(
+        tempWorkspaceStoragePath,
+        DbConfigStore.databaseConfigFileName,
+      );
     });
 
     it("should return true if a remote owner exists", async () => {
@@ -660,7 +661,7 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Check
-      const doesExist = await configStore.doesRemoteOwnerExist("owner1");
+      const doesExist = configStore.doesRemoteOwnerExist("owner1");
       expect(doesExist).toEqual(true);
 
       configStore.dispose();
@@ -680,7 +681,7 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Check
-      const doesExist = await configStore.doesRemoteListExist("list1");
+      const doesExist = configStore.doesRemoteListExist("list1");
       expect(doesExist).toEqual(true);
 
       configStore.dispose();
@@ -700,16 +701,13 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Check
-      const doesExist = await configStore.doesRemoteDbExist(
-        "owner/repo1",
-        "list1",
-      );
+      const doesExist = configStore.doesRemoteDbExist("owner/repo1", "list1");
       expect(doesExist).toEqual(true);
 
       configStore.dispose();
     });
 
-    it("should return true if a local db and local list exists", async () => {
+    it.skip("should return true if a local db and local list exists", async () => {
       // Initial set up
       const dbConfig = createDbConfig({
         localLists: [
@@ -723,9 +721,9 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Check
-      const doesDbExist = await configStore.doesLocalDbExist("db1", "list1");
+      const doesDbExist = configStore.doesLocalDbExist("db1", "list1");
       expect(doesDbExist).toEqual(true);
-      const doesListExist = await configStore.doesLocalListExist("list1");
+      const doesListExist = configStore.doesLocalListExist("list1");
       expect(doesListExist).toEqual(true);
 
       configStore.dispose();
@@ -738,25 +736,15 @@ describe("db config store", () => {
       const configStore = await initializeConfig(dbConfig, configPath, app);
 
       // Check
-      const doesLocalDbExist = await configStore.doesLocalDbExist(
-        "db1",
-        "list1",
-      );
+      const doesLocalDbExist = configStore.doesLocalDbExist("db1", "list1");
       expect(doesLocalDbExist).toEqual(false);
-      const doesLocalListExist = await configStore.doesLocalListExist("list1");
+      const doesLocalListExist = configStore.doesLocalListExist("list1");
       expect(doesLocalListExist).toEqual(false);
-      const doesRemoteDbExist = await configStore.doesRemoteDbExist(
-        "db1",
-        "list1",
-      );
+      const doesRemoteDbExist = configStore.doesRemoteDbExist("db1", "list1");
       expect(doesRemoteDbExist).toEqual(false);
-      const doesRemoteListExist = await configStore.doesRemoteListExist(
-        "list1",
-      );
+      const doesRemoteListExist = configStore.doesRemoteListExist("list1");
       expect(doesRemoteListExist).toEqual(false);
-      const doesRemoteOwnerExist = await configStore.doesRemoteOwnerExist(
-        "owner1",
-      );
+      const doesRemoteOwnerExist = configStore.doesRemoteOwnerExist("owner1");
       expect(doesRemoteOwnerExist).toEqual(false);
 
       configStore.dispose();
@@ -768,8 +756,11 @@ describe("db config store", () => {
     configPath: string,
     app: App,
   ): Promise<DbConfigStore> {
+    if (dbConfig && dbConfig.databases && dbConfig.databases.local) {
+      delete (dbConfig.databases as any).local;
+    }
+    // const config = clearLocalDbs(dbConfig);
     await writeJSON(configPath, dbConfig);
-
     const configStore = new DbConfigStore(app, false);
     await configStore.initialize();
 

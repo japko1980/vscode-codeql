@@ -26,6 +26,7 @@ import {
   openFile,
 } from "./result-table-utils";
 import { vscode } from "../vscode-api";
+import { sendTelemetry } from "../common/telemetry";
 
 const FILE_PATH_REGEX = /^(?:.+[\\/])*(.+)$/;
 
@@ -91,7 +92,7 @@ export class ResultTables extends React.Component<
       // @ts-ignore 2783
       this.props.rawResultSets.map((rs) => ({ t: "RawResultSet", ...rs }));
 
-    if (this.props.interpretation != undefined) {
+    if (this.props.interpretation !== undefined) {
       const tableName = this.getInterpretedTableName();
       resultSets.push({
         t: "InterpretedResultSet",
@@ -153,6 +154,7 @@ export class ResultTables extends React.Component<
       pageNumber: 0,
       selectedTable,
     });
+    sendTelemetry("local-results-table-selection");
   };
 
   private alertTableExtras(): JSX.Element | undefined {
@@ -165,6 +167,9 @@ export class ResultTables extends React.Component<
       this.setState({
         problemsViewSelected: e.target.checked,
       });
+      if (e.target.checked) {
+        sendTelemetry("local-results-show-results-in-problems-view");
+      }
       if (resultsPath !== undefined) {
         vscode.postMessage({
           t: "toggleDiagnostics",
@@ -199,6 +204,10 @@ export class ResultTables extends React.Component<
     return parsedResultSets.pageNumber * parsedResultSets.pageSize;
   }
 
+  sendResultsPageChangedTelemetry() {
+    sendTelemetry("local-results-alert-table-page-changed");
+  }
+
   renderPageButtons(): JSX.Element {
     const { parsedResultSets } = this.props;
     const selectedTable = this.state.selectedTable;
@@ -217,6 +226,7 @@ export class ResultTables extends React.Component<
 
     const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       this.setState({ selectedPage: e.target.value });
+      this.sendResultsPageChangedTelemetry();
     };
     const choosePage = (input: string) => {
       const pageNumber = parseInt(input);
@@ -239,6 +249,7 @@ export class ResultTables extends React.Component<
         pageNumber: Math.max(parsedResultSets.pageNumber - 1, 0),
         selectedTable,
       });
+      this.sendResultsPageChangedTelemetry();
     };
     const nextPage = (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
       vscode.postMessage({
@@ -246,10 +257,12 @@ export class ResultTables extends React.Component<
         pageNumber: Math.min(parsedResultSets.pageNumber + 1, numPages - 1),
         selectedTable,
       });
+      this.sendResultsPageChangedTelemetry();
     };
 
     const openQuery = () => {
       openFile(this.props.queryPath);
+      sendTelemetry("local-results-open-query-file");
     };
     const fileName = FILE_PATH_REGEX.exec(this.props.queryPath)?.[1] || "query";
 
@@ -294,10 +307,11 @@ export class ResultTables extends React.Component<
     const resultSetNames = this.getResultSetNames();
 
     const resultSet = resultSets.find(
-      (resultSet) => resultSet.schema.name == selectedTable,
+      (resultSet) => resultSet.schema.name === selectedTable,
     );
     const nonemptyRawResults = resultSets.some(
-      (resultSet) => resultSet.t == "RawResultSet" && resultSet.rows.length > 0,
+      (resultSet) =>
+        resultSet.t === "RawResultSet" && resultSet.rows.length > 0,
     );
     const numberOfResults = resultSet && renderResultCountString(resultSet);
 
@@ -334,6 +348,7 @@ export class ResultTables extends React.Component<
             nonemptyRawResults={nonemptyRawResults}
             showRawResults={() => {
               this.setState({ selectedTable: SELECT_TABLE_NAME });
+              sendTelemetry("local-results-show-raw-results");
             }}
             offset={this.getOffset()}
           />

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "databases": {
+    "variantAnalysis": {
+      "repositoryLists": [],
+      "owners": [],
+      "repositories": []
+    }
+  }
+}

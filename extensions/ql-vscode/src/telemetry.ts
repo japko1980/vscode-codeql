@@ -12,11 +12,14 @@ import {
   GLOBAL_ENABLE_TELEMETRY,
   LOG_TELEMETRY,
   isIntegrationTestMode,
+  isCanary,
+  newTelemetryEnabled,
 } from "./config";
 import * as appInsights from "applicationinsights";
 import { extLogger } from "./common";
 import { UserCancellationException } from "./commandRunner";
 import { showBinaryChoiceWithUrlDialog } from "./helpers";
+import { RedactableError } from "./pure/errors";
 
 // Key is injected at build time through the APP_INSIGHTS_KEY environment variable.
 const key = "REPLACE-APP-INSIGHTS-KEY";
@@ -155,17 +158,58 @@ export class TelemetryListener extends ConfigListener {
       ? CommandCompletion.Cancelled
       : CommandCompletion.Failed;
 
-    const isCanary = (!!CANARY_FEATURES.getValue<boolean>()).toString();
-
     this.reporter.sendTelemetryEvent(
       "command-usage",
       {
         name,
         status,
-        isCanary,
+        isCanary: isCanary().toString(),
       },
       { executionTime },
     );
+  }
+
+  sendUIInteraction(name: string) {
+    if (!this.reporter) {
+      return;
+    }
+
+    if (!newTelemetryEnabled()) {
+      return;
+    }
+
+    this.reporter.sendTelemetryEvent(
+      "ui-interaction",
+      {
+        name,
+        isCanary: isCanary().toString(),
+      },
+      {},
+    );
+  }
+
+  sendError(
+    error: RedactableError,
+    extraProperties?: { [key: string]: string },
+  ) {
+    if (!this.reporter) {
+      return;
+    }
+
+    if (!newTelemetryEnabled()) {
+      return;
+    }
+
+    const properties: { [key: string]: string } = {
+      isCanary: isCanary().toString(),
+      message: error.redactedMessage,
+      ...extraProperties,
+    };
+    if (error.stack && error.stack !== "") {
+      properties.stack = error.stack;
+    }
+
+    this.reporter.sendTelemetryEvent("error", properties, {});
   }
 
   /**

@@ -1,6 +1,6 @@
 import { CancellationToken } from "vscode";
 import { ProgressCallback } from "../commandRunner";
-import { DatabaseItem } from "../databases";
+import { DatabaseItem } from "../local-databases";
 import {
   Dataset,
   deregisterDatabases,
@@ -74,10 +74,7 @@ export class LegacyQueryRunner extends QueryRunner {
     token: CancellationToken,
     dbItem: DatabaseItem,
   ): Promise<void> {
-    if (
-      dbItem.contents &&
-      (await this.qs.cliServer.cliConstraints.supportsDatabaseRegistration())
-    ) {
+    if (dbItem.contents) {
       const databases: Dataset[] = [
         {
           dbDir: dbItem.contents.datasetUri.fsPath,
@@ -97,10 +94,7 @@ export class LegacyQueryRunner extends QueryRunner {
     token: CancellationToken,
     dbItem: DatabaseItem,
   ): Promise<void> {
-    if (
-      dbItem.contents &&
-      (await this.qs.cliServer.cliConstraints.supportsDatabaseRegistration())
-    ) {
+    if (dbItem.contents) {
       const databases: Dataset[] = [
         {
           dbDir: dbItem.contents.datasetUri.fsPath,

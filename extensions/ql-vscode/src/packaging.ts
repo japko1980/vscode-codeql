@@ -1,24 +1,15 @@
-import { CliVersionConstraint, CodeQLCliServer } from "./cli";
+import { CodeQLCliServer } from "./cli";
 import {
   getOnDiskWorkspaceFolders,
-  showAndLogErrorMessage,
+  showAndLogExceptionWithTelemetry,
   showAndLogInformationMessage,
 } from "./helpers";
 import { QuickPickItem, window } from "vscode";
 import { ProgressCallback, UserCancellationException } from "./commandRunner";
 import { extLogger } from "./common";
-
-const QUERY_PACKS = [
-  "codeql/cpp-queries",
-  "codeql/csharp-queries",
-  "codeql/go-queries",
-  "codeql/java-queries",
-  "codeql/javascript-queries",
-  "codeql/python-queries",
-  "codeql/ruby-queries",
-  "codeql/csharp-solorigate-queries",
-  "codeql/javascript-experimental-atm-queries",
-];
+import { asError, getErrorStack } from "./pure/helpers-pure";
+import { redactableError } from "./pure/errors";
+import { PACKS_BY_QUERY_LANGUAGE } from "./common/query-language";
 
 /**
  * Prompts user to choose packs to download, and downloads them.
@@ -30,11 +21,6 @@ export async function handleDownloadPacks(
   cliServer: CodeQLCliServer,
   progress: ProgressCallback,
 ): Promise<void> {
-  if (!(await cliServer.cliConstraints.supportsPackaging())) {
-    throw new Error(
-      `Packaging commands are not supported by this version of CodeQL. Please upgrade to v${CliVersionConstraint.CLI_VERSION_WITH_PACKAGING} or later.`,
-    );
-  }
   progress({
     message: "Choose packs to download",
     step: 1,
@@ -48,7 +34,7 @@ export async function handleDownloadPacks(
     { ignoreFocusOut: true },
   );
   if (quickpick === queryPackOption) {
-    packsToDownload = QUERY_PACKS;
+    packsToDownload = Object.values(PACKS_BY_QUERY_LANGUAGE).flat();
   } else if (quickpick === customPackOption) {
     const customPack = await window.showInputBox({
       prompt:
@@ -71,8 +57,13 @@ export async function handleDownloadPacks(
       await cliServer.packDownload(packsToDownload);
       void showAndLogInformationMessage("Finished downloading packs.");
     } catch (error) {
-      void showAndLogErrorMessage(
-        "Unable to download all packs. See log for more details.",
+      void showAndLogExceptionWithTelemetry(
+        redactableError(
+          asError(error),
+        )`Unable to download all packs. See log for more details.`,
+        {
+          fullMessage: getErrorStack(error),
+        },
       );
     }
   }
@@ -92,11 +83,6 @@ export async function handleInstallPackDependencies(
   cliServer: CodeQLCliServer,
   progress: ProgressCallback,
 ): Promise<void> {
-  if (!(await cliServer.cliConstraints.supportsPackaging())) {
-    throw new Error(
-      `Packaging commands are not supported by this version of CodeQL. Please upgrade to v${CliVersionConstraint.CLI_VERSION_WITH_PACKAGING} or later.`,
-    );
-  }
   progress({
     message: "Choose packs to install dependencies for",
     step: 1,

@@ -4,7 +4,7 @@
   "description": "CodeQL for Visual Studio Code",
   "author": "GitHub",
   "private": true,
-  "version": "1.7.8",
+  "version": "1.7.11",
   "publisher": "GitHub",
   "license": "MIT",
   "icon": "media/VS-marketplace-CodeQL-icon.png",
@@ -92,8 +92,8 @@
     },
     "jsonValidation": [
       {
-        "fileMatch": "workspace-databases.json",
-        "url": "./workspace-databases-schema.json"
+        "fileMatch": "GitHub.vscode-codeql/databases.json",
+        "url": "./databases-schema.json"
       }
     ],
     "languages": [
@@ -281,22 +281,6 @@
           "scope": "application",
           "description": "Specifies whether or not to write telemetry events to the extension log."
         },
-        "codeQL.variantAnalysis.repositoryLists": {
-          "type": [
-            "object",
-            null
-          ],
-          "patternProperties": {
-            ".*": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "default": null,
-          "markdownDescription": "[For internal use only] Lists of GitHub repositories that you want to run variant analysis against. This should be a JSON object where each key is a user-specified name for this repository list, and the value is an array of GitHub repositories (of the form `<owner>/<repo>`)."
-        },
         "codeQL.variantAnalysis.controllerRepo": {
           "type": "string",
           "default": "",
@@ -320,7 +304,7 @@
       },
       {
         "command": "codeQL.runQuery",
-        "title": "CodeQL: Run Query"
+        "title": "CodeQL: Run Query on Selected Database"
       },
       {
         "command": "codeQL.runQueryOnMultipleDatabases",
@@ -364,8 +348,8 @@
       },
       {
         "command": "codeQLVariantAnalysisRepositories.openConfigFile",
-        "title": "Open Database Configuration File",
-        "icon": "$(edit)"
+        "title": "Open database configuration file",
+        "icon": "$(json)"
       },
       {
         "command": "codeQLVariantAnalysisRepositories.addNewDatabase",
@@ -379,7 +363,7 @@
       },
       {
         "command": "codeQLVariantAnalysisRepositories.setSelectedItem",
-        "title": "✓"
+        "title": "Select"
       },
       {
         "command": "codeQLVariantAnalysisRepositories.setSelectedItemContextMenu",
@@ -395,7 +379,7 @@
       },
       {
         "command": "codeQLVariantAnalysisRepositories.removeItemContextMenu",
-        "title": "Remove"
+        "title": "Delete"
       },
       {
         "command": "codeQLDatabases.chooseDatabaseFolder",
@@ -463,7 +447,7 @@
       },
       {
         "command": "codeQLDatabases.setCurrentDatabase",
-        "title": "Set Current Database"
+        "title": "Select"
       },
       {
         "command": "codeQLDatabases.removeDatabase",
@@ -523,59 +507,38 @@
       },
       {
         "command": "codeQLQueryHistory.openQuery",
-        "title": "Open the Query that Produced these Results",
-        "icon": {
-          "light": "media/light/edit.svg",
-          "dark": "media/dark/edit.svg"
-        }
+        "title": "View Query",
+        "icon": "$(edit)"
       },
       {
         "command": "codeQLQueryHistory.itemClicked",
         "title": "Open Query Results",
-        "icon": {
-          "light": "media/light/preview.svg",
-          "dark": "media/dark/preview.svg"
-        }
+        "icon": "$(preview)"
       },
       {
         "command": "codeQLQueryHistory.removeHistoryItem",
-        "title": "Remove History Item(s)",
-        "icon": {
-          "light": "media/light/trash.svg",
-          "dark": "media/dark/trash.svg"
-        }
+        "title": "Delete",
+        "icon": "$(trash)"
       },
       {
         "command": "codeQLQueryHistory.sortByName",
-        "title": "Sort by Name",
-        "icon": {
-          "light": "media/light/sort-alpha.svg",
-          "dark": "media/dark/sort-alpha.svg"
-        }
+        "title": "Sort by Name"
       },
       {
         "command": "codeQLQueryHistory.sortByDate",
-        "title": "Sort by Query Date",
-        "icon": {
-          "light": "media/light/sort-date.svg",
-          "dark": "media/dark/sort-date.svg"
-        }
+        "title": "Sort by Date"
       },
       {
         "command": "codeQLQueryHistory.sortByCount",
-        "title": "Sort by Results Count",
-        "icon": {
-          "light": "media/light/sort-num.svg",
-          "dark": "media/dark/sort-num.svg"
-        }
+        "title": "Sort by Results Count"
       },
       {
         "command": "codeQLQueryHistory.showQueryLog",
-        "title": "Show Query Log"
+        "title": "View Query Log"
       },
       {
         "command": "codeQLQueryHistory.openQueryDirectory",
-        "title": "Open Query Directory"
+        "title": "Open Results Directory"
       },
       {
         "command": "codeQLQueryHistory.showEvalLog",
@@ -595,7 +558,7 @@
       },
       {
         "command": "codeQLQueryHistory.showQueryText",
-        "title": "Show Query Text"
+        "title": "View Query Text"
       },
       {
         "command": "codeQLQueryHistory.exportResults",
@@ -618,8 +581,8 @@
         "title": "View DIL"
       },
       {
-        "command": "codeQLQueryHistory.setLabel",
-        "title": "Set Label"
+        "command": "codeQLQueryHistory.renameItem",
+        "title": "Rename"
       },
       {
         "command": "codeQLQueryHistory.compareWith",
@@ -627,7 +590,7 @@
       },
       {
         "command": "codeQLQueryHistory.openOnGithub",
-        "title": "Open Variant Analysis on GitHub"
+        "title": "View Logs"
       },
       {
         "command": "codeQLQueryHistory.copyRepoList",
@@ -757,17 +720,17 @@
         {
           "command": "codeQLQueryHistory.sortByName",
           "when": "view == codeQLQueryHistory",
-          "group": "navigation"
+          "group": "1_queryHistory@0"
         },
         {
           "command": "codeQLQueryHistory.sortByDate",
           "when": "view == codeQLQueryHistory",
-          "group": "navigation"
+          "group": "1_queryHistory@1"
         },
         {
           "command": "codeQLQueryHistory.sortByCount",
           "when": "view == codeQLQueryHistory",
-          "group": "navigation"
+          "group": "1_queryHistory@2"
         },
         {
           "command": "codeQLAstViewer.clear",
@@ -798,19 +761,23 @@
       "view/item/context": [
         {
           "command": "codeQLVariantAnalysisRepositories.removeItemContextMenu",
-          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeRemoved/"
+          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeRemoved/",
+          "group": "2_qlContextMenu@3"
         },
         {
           "command": "codeQLVariantAnalysisRepositories.setSelectedItemContextMenu",
-          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeSelected/"
+          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeSelected/",
+          "group": "1_qlContextMenu@1"
         },
         {
           "command": "codeQLVariantAnalysisRepositories.renameItemContextMenu",
-          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeRenamed/"
+          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeRenamed/",
+          "group": "2_qlContextMenu@2"
         },
         {
           "command": "codeQLVariantAnalysisRepositories.openOnGitHubContextMenu",
-          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeOpenedOnGitHub/"
+          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeOpenedOnGitHub/",
+          "group": "2_qlContextMenu@1"
         },
         {
           "command": "codeQLDatabases.setCurrentDatabase",
@@ -844,57 +811,62 @@
         },
         {
           "command": "codeQLQueryHistory.openQuery",
-          "group": "9_qlCommands",
+          "group": "2_queryHistory@0",
           "when": "view == codeQLQueryHistory"
         },
         {
           "command": "codeQLQueryHistory.removeHistoryItem",
-          "group": "9_qlCommands",
+          "group": "7_queryHistory@0",
           "when": "viewItem == interpretedResultsItem || viewItem == rawResultsItem || viewItem == remoteResultsItem || viewItem == cancelledResultsItem || viewItem == cancelledRemoteResultsItem"
         },
         {
-          "command": "codeQLQueryHistory.setLabel",
-          "group": "9_qlCommands",
+          "command": "codeQLQueryHistory.removeHistoryItem",
+          "group": "inline",
+          "when": "viewItem == interpretedResultsItem || viewItem == rawResultsItem || viewItem == remoteResultsItem || viewItem == cancelledResultsItem || viewItem == cancelledRemoteResultsItem"
+        },
+        {
+          "command": "codeQLQueryHistory.renameItem",
+          "group": "6_queryHistory@0",
           "when": "view == codeQLQueryHistory"
         },
         {
           "command": "codeQLQueryHistory.compareWith",
-          "group": "9_qlCommands",
+          "group": "3_queryHistory@0",
           "when": "viewItem == rawResultsItem || viewItem == interpretedResultsItem"
         },
         {
           "command": "codeQLQueryHistory.showQueryLog",
-          "group": "9_qlCommands",
+          "group": "4_queryHistory@4",
           "when": "viewItem == rawResultsItem || viewItem == interpretedResultsItem"
         },
         {
           "command": "codeQLQueryHistory.openQueryDirectory",
-          "group": "9_qlCommands",
+          "group": "2_queryHistory@4",
           "when": "view == codeQLQueryHistory && !hasRemoteServer"
         },
         {
           "command": "codeQLQueryHistory.showEvalLog",
-          "group": "9_qlCommands",
+          "group": "4_queryHistory@1",
           "when": "codeql.supportsEvalLog && viewItem == rawResultsItem || codeql.supportsEvalLog && viewItem == interpretedResultsItem || codeql.supportsEvalLog && viewItem == cancelledResultsItem"
         },
         {
           "command": "codeQLQueryHistory.showEvalLogSummary",
-          "group": "9_qlCommands",
+          "group": "4_queryHistory@2",
           "when": "codeql.supportsEvalLog && viewItem == rawResultsItem || codeql.supportsEvalLog && viewItem == interpretedResultsItem || codeql.supportsEvalLog && viewItem == cancelledResultsItem"
         },
         {
           "command": "codeQLQueryHistory.showEvalLogViewer",
-          "group": "9_qlCommands",
+          "group": "4_queryHistory@3",
           "when": "config.codeQL.canary && codeql.supportsEvalLog && viewItem == rawResultsItem || config.codeQL.canary && codeql.supportsEvalLog && viewItem == interpretedResultsItem || config.codeQL.canary && codeql.supportsEvalLog && viewItem == cancelledResultsItem"
         },
         {
           "command": "codeQLQueryHistory.showQueryText",
-          "group": "9_qlCommands",
+          "group": "2_queryHistory@2",
           "when": "view == codeQLQueryHistory"
         },
         {
           "command": "codeQLQueryHistory.exportResults",
-          "group": "9_qlCommands",
+          "group": "1_queryHistory@0",
           "when": "view == codeQLQueryHistory && viewItem == remoteResultsItem"
         },
         {
@@ -904,17 +876,17 @@
         },
         {
           "command": "codeQLQueryHistory.viewCsvAlerts",
-          "group": "9_qlCommands",
+          "group": "5_queryHistory@0",
           "when": "viewItem == interpretedResultsItem"
         },
         {
           "command": "codeQLQueryHistory.viewSarifAlerts",
-          "group": "9_qlCommands",
+          "group": "5_queryHistory@1",
           "when": "viewItem == interpretedResultsItem"
         },
         {
           "command": "codeQLQueryHistory.viewDil",
-          "group": "9_qlCommands",
+          "group": "5_queryHistory@2",
           "when": "viewItem == rawResultsItem || viewItem == interpretedResultsItem"
         },
         {
@@ -924,12 +896,12 @@
         },
         {
           "command": "codeQLQueryHistory.openOnGithub",
-          "group": "9_qlCommands",
+          "group": "2_queryHistory@3",
           "when": "viewItem == remoteResultsItem || viewItem == inProgressRemoteResultsItem || viewItem == cancelledRemoteResultsItem"
         },
         {
           "command": "codeQLQueryHistory.copyRepoList",
-          "group": "9_qlCommands",
+          "group": "1_queryHistory@1",
           "when": "viewItem == remoteResultsItem"
         },
         {
@@ -1177,7 +1149,7 @@
           "when": "false"
         },
         {
-          "command": "codeQLQueryHistory.setLabel",
+          "command": "codeQLQueryHistory.renameItem",
           "when": "false"
         },
         {
@@ -1294,7 +1266,7 @@
         {
           "id": "codeQLVariantAnalysisRepositories",
           "name": "Variant Analysis Repositories",
-          "when": "config.codeQL.canary && config.codeQL.variantAnalysis.repositoriesPanel"
+          "when": "config.codeQL.canary"
         },
         {
           "id": "codeQLQueryHistory",
@@ -1318,7 +1290,7 @@
       },
       {
         "view": "codeQLQueryHistory",
-        "contents": "Run the 'CodeQL: Run Query' command on a QL query.\n[Run Query](command:codeQL.runQuery)"
+        "contents": "You have no query history items at the moment.\n\nSelect a database to run a CodeQL query and get your first results."
       },
       {
         "view": "codeQLDatabases",
@@ -1327,22 +1299,28 @@
       {
         "view": "codeQLEvalLogViewer",
         "contents": "Run the 'Show Evaluator Log (UI)' command on a CodeQL query run in the Query History view."
+      },
+      {
+        "view": "codeQLVariantAnalysisRepositories",
+        "contents": "Set up a controller repository to start using variant analysis.\n[Set up controller repository](command:codeQLVariantAnalysisRepositories.setupControllerRepository)",
+        "when": "!config.codeQL.variantAnalysis.controllerRepo"
       }
     ]
   },
   "scripts": {
     "build": "gulp",
     "watch": "gulp watch",
-    "test": "npm-run-all -p test:*",
+    "test": "npm-run-all test:*",
     "test:unit": "cross-env TZ=UTC LANG=en-US jest --projects test/unit-tests",
     "test:view": "jest --projects src/view",
-    "integration": "npm-run-all integration:*",
-    "integration:no-workspace": "jest --projects test/vscode-tests/no-workspace",
-    "integration:minimal-workspace": "jest --projects test/vscode-tests/minimal-workspace",
-    "cli-integration": "jest --projects test/vscode-tests/cli-integration",
+    "test:vscode-integration": "npm-run-all test:vscode-integration:*",
+    "test:vscode-integration:activated-extension": "jest --projects test/vscode-tests/activated-extension",
+    "test:vscode-integration:no-workspace": "jest --projects test/vscode-tests/no-workspace",
+    "test:vscode-integration:minimal-workspace": "jest --projects test/vscode-tests/minimal-workspace",
+    "test:cli-integration": "jest --projects test/vscode-tests/cli-integration",
     "update-vscode": "node ./node_modules/vscode/bin/install",
     "format": "prettier --write **/*.{ts,tsx} && eslint . --ext .ts,.tsx --fix",
-    "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
+    "lint": "eslint . --ext .js,.ts,.tsx --max-warnings=0",
     "format-staged": "lint-staged",
     "storybook": "start-storybook -p 6006",
     "build-storybook": "build-storybook",
@@ -1453,6 +1431,7 @@
     "esbuild": "^0.15.15",
     "eslint": "^8.23.1",
     "eslint-config-prettier": "^8.5.0",
+    "eslint-plugin-etc": "^2.0.2",
     "eslint-plugin-github": "^4.4.1",
     "eslint-plugin-jest-dom": "^4.0.2",
     "eslint-plugin-prettier": "^4.2.1",
@@ -1489,7 +1468,7 @@
   "husky": {
     "hooks": {
       "pre-commit": "npm run format-staged",
-      "pre-push": "npm run lint && scripts/forbid-test-only"
+      "pre-push": "scripts/forbid-test-only"
     }
   },
   "lint-staged": {

@@ -3,10 +3,10 @@ import { render as reactRender, screen, waitFor } from "@testing-library/react";
 import {
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepositoryDownloadStatus,
-} from "../../../remote-queries/shared/variant-analysis";
+} from "../../../variant-analysis/shared/variant-analysis";
 import userEvent from "@testing-library/user-event";
 import { RepoRow, RepoRowProps } from "../RepoRow";
-import { createMockRepositoryWithMetadata } from "../../../../test/factories/remote-queries/shared/repository";
+import { createMockRepositoryWithMetadata } from "../../../../test/factories/variant-analysis/shared/repository";
 
 describe(RepoRow.name, () => {
   const render = (props: Partial<RepoRowProps> = {}) => {
@@ -87,7 +87,10 @@ describe(RepoRow.name, () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
       resultCount: 178,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Pending,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Pending,
+      },
     });
 
     expect(
@@ -101,7 +104,11 @@ describe(RepoRow.name, () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
       resultCount: 178,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.InProgress,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus:
+          VariantAnalysisScannedRepositoryDownloadStatus.InProgress,
+      },
     });
 
     expect(
@@ -115,7 +122,11 @@ describe(RepoRow.name, () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
       resultCount: 178,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus:
+          VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      },
     });
 
     expect(
@@ -129,7 +140,10 @@ describe(RepoRow.name, () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
       resultCount: 178,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Failed,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Failed,
+      },
     });
 
     expect(
@@ -320,7 +334,11 @@ describe(RepoRow.name, () => {
   it("can expand the repo item when succeeded and loaded", async () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus:
+          VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      },
       interpretedResults: [],
     });
 
@@ -340,7 +358,11 @@ describe(RepoRow.name, () => {
   it("can expand the repo item when succeeded and not loaded", async () => {
     const { rerender } = render({
       status: VariantAnalysisRepoStatus.Succeeded,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus:
+          VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      },
     });
 
     await userEvent.click(
@@ -411,7 +433,10 @@ describe(RepoRow.name, () => {
   it("does not allow selecting the item if the item has not been downloaded successfully", async () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Failed,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Failed,
+      },
     });
 
     // It seems like sometimes the first render doesn't have the checkbox disabled
@@ -424,7 +449,11 @@ describe(RepoRow.name, () => {
   it("allows selecting the item if the item has been downloaded", async () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
-      downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      downloadState: {
+        repositoryId: 1,
+        downloadStatus:
+          VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      },
     });
 
     expect(screen.getByRole("checkbox")).toBeEnabled();

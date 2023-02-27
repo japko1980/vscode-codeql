@@ -2,6 +2,21 @@
 
 ## [UNRELEASED]
 
+- Enable collection of telemetry concerning interactions with UI elements, including buttons, links, and other inputs. [#2114](https://github.com/github/vscode-codeql/pull/2114)
+
+# 1.7.10 - 23 February 2023
+
+- Fix bug that was causing unwanted error notifications.
+
+## 1.7.9 - 20 February 2023
+
+No user facing changes.
+
+## 1.7.8 - 2 February 2023
+
+- Renamed command "CodeQL: Run Query" to "CodeQL: Run Query on Selected Database". [#1962](https://github.com/github/vscode-codeql/pull/1962)
+- Remove support for CodeQL CLI versions older than 2.7.6. [#1788](https://github.com/github/vscode-codeql/pull/1788)
+
 ## 1.7.7 - 13 December 2022
 
 - Increase the required version of VS Code to 1.67.0. [#1662](https://github.com/github/vscode-codeql/pull/1662)

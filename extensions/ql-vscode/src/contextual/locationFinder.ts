@@ -9,7 +9,7 @@ import {
   ResultSetSchema,
 } from "../pure/bqrs-cli-types";
 import { CodeQLCliServer } from "../cli";
-import { DatabaseManager, DatabaseItem } from "../databases";
+import { DatabaseManager, DatabaseItem } from "../local-databases";
 import fileRangeFromURI from "./fileRangeFromURI";
 import { ProgressCallback } from "../commandRunner";
 import { KeyType } from "./keyType";
@@ -128,9 +128,9 @@ function createTemplates(path: string): Record<string, string> {
 function isValidSelect(selectInfo: ResultSetSchema | undefined) {
   return (
     selectInfo &&
-    selectInfo.columns.length == 3 &&
-    selectInfo.columns[0].kind == ColumnKindCode.ENTITY &&
-    selectInfo.columns[1].kind == ColumnKindCode.ENTITY &&
-    selectInfo.columns[2].kind == ColumnKindCode.STRING
+    selectInfo.columns.length === 3 &&
+    selectInfo.columns[0].kind === ColumnKindCode.ENTITY &&
+    selectInfo.columns[1].kind === ColumnKindCode.ENTITY &&
+    selectInfo.columns[2].kind === ColumnKindCode.STRING
   );
 }

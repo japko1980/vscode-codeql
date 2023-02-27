@@ -1,5 +1,8 @@
 import { join } from "path";
-import { DbConfig } from "../../../../src/databases/config/db-config";
+import {
+  DbConfig,
+  DB_CONFIG_VERSION,
+} from "../../../../src/databases/config/db-config";
 import { DbConfigValidator } from "../../../../src/databases/config/db-config-validator";
 import { DbConfigValidationErrorKind } from "../../../../src/databases/db-validation-errors";
 import {
@@ -15,6 +18,7 @@ describe("db config validation", () => {
     // We're intentionally bypassing the type check because we'd
     // like to make sure validation errors are highlighted.
     const dbConfig = {
+      version: DB_CONFIG_VERSION,
       databases: {
         variantAnalysis: {
           repositoryLists: [
@@ -31,18 +35,14 @@ describe("db config validation", () => {
 
     const validationOutput = configValidator.validate(dbConfig);
 
-    expect(validationOutput).toHaveLength(3);
+    expect(validationOutput).toHaveLength(2);
 
     expect(validationOutput[0]).toEqual({
-      kind: DbConfigValidationErrorKind.InvalidConfig,
-      message: "/databases must have required property 'local'",
-    });
-    expect(validationOutput[1]).toEqual({
       kind: DbConfigValidationErrorKind.InvalidConfig,
       message:
         "/databases/variantAnalysis must have required property 'owners'",
     });
-    expect(validationOutput[2]).toEqual({
+    expect(validationOutput[1]).toEqual({
       kind: DbConfigValidationErrorKind.InvalidConfig,
       message: "/databases/variantAnalysis must NOT have additional properties",
     });

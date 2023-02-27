@@ -22,14 +22,16 @@ import {
   DbListKind,
   LocalDatabaseDbItem,
   LocalListDbItem,
-  remoteDbKinds,
-  VariantAnalysisUserDefinedListDbItem,
+  RemoteUserDefinedListDbItem,
 } from "../db-item";
 import { getDbItemName } from "../db-item-naming";
 import { DbManager } from "../db-manager";
 import { DbTreeDataProvider } from "./db-tree-data-provider";
 import { DbTreeViewItem } from "./db-tree-view-item";
 import { getGitHubUrl } from "./db-tree-view-item-action";
+import { getControllerRepo } from "../../variant-analysis/run-remote-query";
+import { getErrorMessage } from "../../pure/helpers-pure";
+import { Credentials } from "../../common/authentication";
 
 export interface RemoteDatabaseQuickPickItem extends QuickPickItem {
   kind: string;
@@ -43,7 +45,10 @@ export class DbPanel extends DisposableObject {
   private readonly dataProvider: DbTreeDataProvider;
   private readonly treeView: TreeView<DbTreeViewItem>;
 
-  public constructor(private readonly dbManager: DbManager) {
+  public constructor(
+    private readonly dbManager: DbManager,
+    private readonly credentials: Credentials,
+  ) {
     super();
 
     this.dataProvider = new DbTreeDataProvider(dbManager);
@@ -113,6 +118,12 @@ export class DbPanel extends DisposableObject {
         (treeViewItem: DbTreeViewItem) => this.removeItem(treeViewItem),
       ),
     );
+    this.push(
+      commandRunner(
+        "codeQLVariantAnalysisRepositories.setupControllerRepository",
+        () => this.setupControllerRepository(),
+      ),
+    );
   }
 
   private async openConfigFile(): Promise<void> {
@@ -124,7 +135,7 @@ export class DbPanel extends DisposableObject {
   private async addNewRemoteDatabase(): Promise<void> {
     const highlightedItem = await this.getHighlightedDbItem();
 
-    if (highlightedItem?.kind === DbItemKind.VariantAnalysisUserDefinedList) {
+    if (highlightedItem?.kind === DbItemKind.RemoteUserDefinedList) {
       await this.addNewRemoteRepo(highlightedItem.listName);
     } else if (
       highlightedItem?.kind === DbItemKind.RemoteRepo &&
@@ -135,14 +146,14 @@ export class DbPanel extends DisposableObject {
       const quickPickItems = [
         {
           label: "$(repo) From a GitHub repository",
-          detail: "Add a remote repository from GitHub",
+          detail: "Add a variant analysis repository from GitHub",
           alwaysShow: true,
           kind: "repo",
         },
         {
           label: "$(organization) All repositories of a GitHub org or owner",
           detail:
-            "Add a remote list of repositories from a GitHub organization/owner",
+            "Add a variant analysis list of repositories from a GitHub organization/owner",
           alwaysShow: true,
           kind: "owner",
         },
@@ -151,7 +162,7 @@ export class DbPanel extends DisposableObject {
         await window.showQuickPick<RemoteDatabaseQuickPickItem>(
           quickPickItems,
           {
-            title: "Add a remote repository",
+            title: "Add a variant analysis repository",
             placeHolder: "Select an option",
             ignoreFocusOut: true,
           },
@@ -171,9 +182,9 @@ export class DbPanel extends DisposableObject {
 
   private async addNewRemoteRepo(parentList?: string): Promise<void> {
     const repoName = await window.showInputBox({
-      title: "Add a remote repository",
+      title: "Add a repository",
       prompt: "Insert a GitHub repository URL or name with owner",
-      placeHolder: "github.com/<owner>/<repo> or <owner>/<repo>",
+      placeHolder: "<owner>/<repo> or https://github.com/<owner>/<repo>",
     });
     if (!repoName) {
       return;
@@ -197,7 +208,7 @@ export class DbPanel extends DisposableObject {
     const ownerName = await window.showInputBox({
       title: "Add all repositories of a GitHub org or owner",
       prompt: "Insert a GitHub organization or owner name",
-      placeHolder: "github.com/<owner> or <owner>",
+      placeHolder: "<owner> or https://github.com/<owner>",
     });
 
     if (!ownerName) {
@@ -219,7 +230,7 @@ export class DbPanel extends DisposableObject {
   }
 
   private async addNewList(): Promise<void> {
-    const listKind = await this.getAddNewListKind();
+    const listKind = DbListKind.Remote;
 
     const listName = await window.showInputBox({
       prompt: "Enter a name for the new list",
@@ -237,53 +248,17 @@ export class DbPanel extends DisposableObject {
     await this.dbManager.addNewList(listKind, listName);
   }
 
-  private async getAddNewListKind(): Promise<DbListKind> {
-    const highlightedItem = await this.getHighlightedDbItem();
-    if (highlightedItem) {
-      return remoteDbKinds.includes(highlightedItem.kind)
-        ? DbListKind.Remote
-        : DbListKind.Local;
-    } else {
-      const quickPickItems = [
-        {
-          label: "$(cloud) Remote",
-          detail: "Add a remote database from GitHub",
-          alwaysShow: true,
-          kind: DbListKind.Remote,
-        },
-        {
-          label: "$(database) Local",
-          detail: "Import a database from the cloud or a local file",
-          alwaysShow: true,
-          kind: DbListKind.Local,
-        },
-      ];
-      const selectedOption = await window.showQuickPick<AddListQuickPickItem>(
-        quickPickItems,
-        {
-          title: "Add a new database",
-          ignoreFocusOut: true,
-        },
-      );
-      if (!selectedOption) {
-        // We don't need to display a warning pop-up in this case, since the user just escaped out of the operation.
-        // We set 'true' to make this a silent exception.
-        throw new UserCancellationException(
-          "No database list kind selected",
-          true,
-        );
-      }
-
-      return selectedOption.kind;
-    }
-  }
-
   private async setSelectedItem(treeViewItem: DbTreeViewItem): Promise<void> {
     if (treeViewItem.dbItem === undefined) {
       throw new Error(
         "Not a selectable database item. Please select a valid item.",
       );
     }
+
+    // Optimistically update the UI to select the item that the user
+    // selected to avoid delay in the UI.
+    this.dataProvider.updateSelectedItem(treeViewItem);
+
     await this.dbManager.setSelectedDbItem(treeViewItem.dbItem);
   }
 
@@ -313,7 +288,7 @@ export class DbPanel extends DisposableObject {
       case DbItemKind.LocalDatabase:
         await this.renameLocalDatabaseItem(dbItem, newName);
         break;
-      case DbItemKind.VariantAnalysisUserDefinedList:
+      case DbItemKind.RemoteUserDefinedList:
         await this.renameVariantAnalysisUserDefinedListItem(dbItem, newName);
         break;
       default:
@@ -354,7 +329,7 @@ export class DbPanel extends DisposableObject {
   }
 
   private async renameVariantAnalysisUserDefinedListItem(
-    dbItem: VariantAnalysisUserDefinedListDbItem,
+    dbItem: RemoteUserDefinedListDbItem,
     newName: string,
   ): Promise<void> {
     if (dbItem.listName === newName) {
@@ -419,10 +394,27 @@ export class DbPanel extends DisposableObject {
     const githubUrl = getGitHubUrl(treeViewItem.dbItem);
     if (!githubUrl) {
       throw new Error(
-        "Unable to open on GitHub. Please select a remote repository or owner.",
+        "Unable to open on GitHub. Please select a variant analysis repository or owner.",
       );
     }
 
     await commands.executeCommand("vscode.open", Uri.parse(githubUrl));
+  }
+
+  private async setupControllerRepository(): Promise<void> {
+    try {
+      // This will also validate that the controller repository is valid
+      await getControllerRepo(this.credentials);
+    } catch (e: unknown) {
+      if (e instanceof UserCancellationException) {
+        return;
+      }
+
+      void showAndLogErrorMessage(
+        `An error occurred while setting up the controller repository: ${getErrorMessage(
+          e,
+        )}`,
+      );
+    }
   }
 }

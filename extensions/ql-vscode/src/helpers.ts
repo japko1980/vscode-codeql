@@ -19,8 +19,12 @@ import {
 } from "vscode";
 import { CodeQLCliServer, QlpacksInfo } from "./cli";
 import { UserCancellationException } from "./commandRunner";
-import { extLogger } from "./common";
+import { extLogger, OutputChannelLogger } from "./common";
 import { QueryMetadata } from "./pure/interface-types";
+import { telemetryListener } from "./telemetry";
+import { RedactableError } from "./pure/errors";
+import { getQlPackPath } from "./pure/ql";
+import { dbSchemeToLanguage } from "./common/query-language";
 
 // Shared temporary folder for the extension.
 export const tmpDir = dirSync({
@@ -43,32 +47,55 @@ export const tmpDirDisposal = {
   },
 };
 
+interface ShowAndLogExceptionOptions extends ShowAndLogOptions {
+  /** Custom properties to include in the telemetry report. */
+  extraTelemetryProperties?: { [key: string]: string };
+}
+
+interface ShowAndLogOptions {
+  /** The output logger that will receive the message. */
+  outputLogger?: OutputChannelLogger;
+  /** A set of items that will be rendered as actions in the message. */
+  items?: string[];
+  /**
+   * An alternate message that is added to the log, but not displayed in the popup.
+   * This is useful for adding extra detail to the logs that would be too noisy for the popup.
+   */
+  fullMessage?: string;
+}
+
+/**
+ * Show an error message, log it to the console, and emit redacted information as telemetry
+ *
+ * @param error The error to show. Only redacted information will be included in the telemetry.
+ * @param options See individual fields on `ShowAndLogExceptionOptions` type.
+ *
+ * @return A promise that resolves to the selected item or undefined when being dismissed.
+ */
+export async function showAndLogExceptionWithTelemetry(
+  error: RedactableError,
+  options: ShowAndLogExceptionOptions = {},
+): Promise<string | undefined> {
+  telemetryListener?.sendError(error, options.extraTelemetryProperties);
+  return showAndLogErrorMessage(error.fullMessage, options);
+}
+
 /**
  * Show an error message and log it to the console
  *
  * @param message The message to show.
- * @param options.outputLogger The output logger that will receive the message
- * @param options.items A set of items that will be rendered as actions in the message.
- * @param options.fullMessage An alternate message that is added to the log, but not displayed
- *                           in the popup. This is useful for adding extra detail to the logs
- *                           that would be too noisy for the popup.
+ * @param options See individual fields on `ShowAndLogOptions` type.
  *
  * @return A promise that resolves to the selected item or undefined when being dismissed.
  */
 export async function showAndLogErrorMessage(
   message: string,
-  {
-    outputLogger = extLogger,
-    items = [] as string[],
-    fullMessage = undefined as string | undefined,
-  } = {},
+  options?: ShowAndLogOptions,
 ): Promise<string | undefined> {
   return internalShowAndLog(
     dropLinesExceptInitial(message),
-    items,
-    outputLogger,
     Window.showErrorMessage,
-    fullMessage,
+    options,
   );
 }
 
@@ -80,42 +107,30 @@ function dropLinesExceptInitial(message: string, n = 2) {
  * Show a warning message and log it to the console
  *
  * @param message The message to show.
- * @param options.outputLogger The output logger that will receive the message
- * @param options.items A set of items that will be rendered as actions in the message.
+ * @param options See individual fields on `ShowAndLogOptions` type.
  *
  * @return A promise that resolves to the selected item or undefined when being dismissed.
  */
 export async function showAndLogWarningMessage(
   message: string,
-  { outputLogger = extLogger, items = [] as string[] } = {},
+  options?: ShowAndLogOptions,
 ): Promise<string | undefined> {
-  return internalShowAndLog(
-    message,
-    items,
-    outputLogger,
-    Window.showWarningMessage,
-  );
+  return internalShowAndLog(message, Window.showWarningMessage, options);
 }
+
 /**
  * Show an information message and log it to the console
  *
  * @param message The message to show.
- * @param options.outputLogger The output logger that will receive the message
- * @param options.items A set of items that will be rendered as actions in the message.
+ * @param options See individual fields on `ShowAndLogOptions` type.
  *
  * @return A promise that resolves to the selected item or undefined when being dismissed.
  */
 export async function showAndLogInformationMessage(
   message: string,
-  { outputLogger = extLogger, items = [] as string[], fullMessage = "" } = {},
+  options?: ShowAndLogOptions,
 ): Promise<string | undefined> {
-  return internalShowAndLog(
-    message,
-    items,
-    outputLogger,
-    Window.showInformationMessage,
-    fullMessage,
-  );
+  return internalShowAndLog(message, Window.showInformationMessage, options);
 }
 
 type ShowMessageFn = (
@@ -125,10 +140,8 @@ type ShowMessageFn = (
 
 async function internalShowAndLog(
   message: string,
-  items: string[],
-  outputLogger = extLogger,
   fn: ShowMessageFn,
-  fullMessage?: string,
+  { items = [], outputLogger = extLogger, fullMessage }: ShowAndLogOptions = {},
 ): Promise<string | undefined> {
   const label = "Show Log";
   void outputLogger.log(fullMessage || message);
@@ -242,6 +255,15 @@ export function getOnDiskWorkspaceFolders() {
       diskWorkspaceFolders.push(workspaceFolder.uri.fsPath);
   }
   return diskWorkspaceFolders;
+}
+
+/** Check if folder is already present in workspace */
+export function isFolderAlreadyInWorkspace(folderName: string) {
+  const workspaceFolders = workspace.workspaceFolders || [];
+
+  return !!workspaceFolders.find(
+    (workspaceFolder) => workspaceFolder.name === folderName,
+  );
 }
 
 /**
@@ -367,17 +389,22 @@ async function findDbschemePack(
 ): Promise<{ name: string; isLibraryPack: boolean }> {
   for (const { packDir, packName } of packs) {
     if (packDir !== undefined) {
-      const qlpack = load(
-        await readFile(join(packDir, "qlpack.yml"), "utf8"),
-      ) as { dbscheme?: string; library?: boolean };
-      if (
-        qlpack.dbscheme !== undefined &&
-        basename(qlpack.dbscheme) === basename(dbschemePath)
-      ) {
-        return {
-          name: packName,
-          isLibraryPack: qlpack.library === true,
+      const qlpackPath = await getQlPackPath(packDir);
+
+      if (qlpackPath !== undefined) {
+        const qlpack = load(await readFile(qlpackPath, "utf8")) as {
+          dbscheme?: string;
+          library?: boolean;
         };
+        if (
+          qlpack.dbscheme !== undefined &&
+          basename(qlpack.dbscheme) === basename(dbschemePath)
+        ) {
+          return {
+            name: packName,
+            isLibraryPack: qlpack.library === true,
+          };
+        }
       }
     }
   }
@@ -540,19 +567,8 @@ export class CachedOperation<U> {
  * `cli.CodeQLCliServer.resolveDatabase` and use the first entry in the
  * `languages` property.
  *
- * @see cli.CliVersionConstraint.supportsLanguageName
  * @see cli.CodeQLCliServer.resolveDatabase
  */
-export const dbSchemeToLanguage = {
-  "semmlecode.javascript.dbscheme": "javascript",
-  "semmlecode.cpp.dbscheme": "cpp",
-  "semmlecode.dbscheme": "java",
-  "semmlecode.python.dbscheme": "python",
-  "semmlecode.csharp.dbscheme": "csharp",
-  "go.dbscheme": "go",
-  "ruby.dbscheme": "ruby",
-  "swift.dbscheme": "swift",
-};
 
 export const languageToDbScheme = Object.entries(dbSchemeToLanguage).reduce(
   (acc, [k, v]) => {

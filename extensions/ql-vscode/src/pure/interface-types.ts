@@ -1,9 +1,4 @@
 import * as sarif from "sarif";
-import { AnalysisResults } from "../remote-queries/shared/analysis-result";
-import {
-  AnalysisSummary,
-  RemoteQueryResult,
-} from "../remote-queries/shared/remote-query-result";
 import {
   RawResultSet,
   ResultRow,
@@ -15,7 +10,7 @@ import {
   VariantAnalysis,
   VariantAnalysisScannedRepositoryResult,
   VariantAnalysisScannedRepositoryState,
-} from "../remote-queries/shared/variant-analysis";
+} from "../variant-analysis/shared/variant-analysis";
 import { RepositoriesFilterSortStateWithIds } from "./variant-analysis-filter-sort";
 
 /**
@@ -56,13 +51,6 @@ export interface QueryMetadata {
   id?: string;
   kind?: string;
   scored?: string;
-}
-
-export interface PreviousExecution {
-  queryName: string;
-  time: string;
-  databaseName: string;
-  durationSeconds: number;
 }
 
 export type SarifInterpretationData = {
@@ -200,7 +188,8 @@ export type FromResultsViewMsg =
   | ChangeInterpretedResultsSortMsg
   | ViewLoadedMsg
   | ChangePage
-  | OpenFileMsg;
+  | OpenFileMsg
+  | TelemetryMessage;
 
 /**
  * Message from the results view to open a database source
@@ -219,11 +208,6 @@ export interface OpenFileMsg {
   t: "openFile";
   /* Full path to the file to open. */
   filePath: string;
-}
-
-export interface OpenVirtualFileMsg {
-  t: "openVirtualFile";
-  queryText: string;
 }
 
 /**
@@ -306,7 +290,8 @@ export type FromCompareViewMessage =
   | ViewLoadedMsg
   | ChangeCompareMessage
   | ViewSourceFileMsg
-  | OpenQueryMessage;
+  | OpenQueryMessage
+  | TelemetryMessage;
 
 /**
  * Message from the compare view to request opening a query.
@@ -349,12 +334,6 @@ export interface SetComparisonsMessage {
   readonly rows: QueryCompareResult | undefined;
   readonly message: string | undefined;
   readonly databaseUri: string;
-}
-
-export enum DiffKind {
-  Add = "Add",
-  Remove = "Remove",
-  Change = "Change",
 }
 
 /**
@@ -403,55 +382,6 @@ export interface ParsedResultSets {
   selectedTable?: string; // when undefined, means 'show default table'
   resultSetNames: string[];
   resultSet: ResultSet;
-}
-
-export type FromRemoteQueriesMessage =
-  | ViewLoadedMsg
-  | RemoteQueryErrorMessage
-  | OpenFileMsg
-  | OpenVirtualFileMsg
-  | RemoteQueryDownloadAnalysisResultsMessage
-  | RemoteQueryDownloadAllAnalysesResultsMessage
-  | RemoteQueryExportResultsMessage
-  | CopyRepoListMessage;
-
-export type ToRemoteQueriesMessage =
-  | SetRemoteQueryResultMessage
-  | SetAnalysesResultsMessage;
-
-export interface SetRemoteQueryResultMessage {
-  t: "setRemoteQueryResult";
-  queryResult: RemoteQueryResult;
-}
-
-export interface SetAnalysesResultsMessage {
-  t: "setAnalysesResults";
-  analysesResults: AnalysisResults[];
-}
-
-export interface RemoteQueryErrorMessage {
-  t: "remoteQueryError";
-  error: string;
-}
-
-export interface RemoteQueryDownloadAnalysisResultsMessage {
-  t: "remoteQueryDownloadAnalysisResults";
-  analysisSummary: AnalysisSummary;
-}
-
-export interface RemoteQueryDownloadAllAnalysesResultsMessage {
-  t: "remoteQueryDownloadAllAnalysesResults";
-  analysisSummaries: AnalysisSummary[];
-}
-
-export interface RemoteQueryExportResultsMessage {
-  t: "remoteQueryExportResults";
-  queryId: string;
-}
-
-export interface CopyRepoListMessage {
-  t: "copyRepoList";
-  queryId: string;
 }
 
 export interface SetVariantAnalysisMessage {
@@ -504,6 +434,11 @@ export interface CancelVariantAnalysisMessage {
   t: "cancelVariantAnalysis";
 }
 
+export interface TelemetryMessage {
+  t: "telemetry";
+  action: string;
+}
+
 export type ToVariantAnalysisMessage =
   | SetVariantAnalysisMessage
   | SetRepoResultsMessage
@@ -517,4 +452,5 @@ export type FromVariantAnalysisMessage =
   | CopyRepositoryListMessage
   | ExportResultsMessage
   | OpenLogsMessage
-  | CancelVariantAnalysisMessage;
+  | CancelVariantAnalysisMessage
+  | TelemetryMessage;

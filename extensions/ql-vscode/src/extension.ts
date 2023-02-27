@@ -4,28 +4,27 @@ import {
   CancellationTokenSource,
   commands,
   Disposable,
+  env,
   ExtensionContext,
   extensions,
   languages,
   ProgressLocation,
   ProgressOptions,
-  Uri,
-  window as Window,
-  env,
-  window,
   QuickPickItem,
   Range,
-  workspace,
-  ProviderResult,
+  Uri,
   version as vscodeVersion,
+  window as Window,
+  window,
+  workspace,
 } from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
-import { platform, arch } from "os";
+import { arch, platform } from "os";
 import { ensureDir } from "fs-extra";
-import { join, basename } from "path";
+import { basename, join } from "path";
 import { dirSync } from "tmp-promise";
 import { testExplorerExtensionId, TestHub } from "vscode-test-adapter-api";
-import { parse, lt } from "semver";
+import { lt, parse } from "semver";
 
 import { AstViewer } from "./astViewer";
 import {
@@ -33,25 +32,24 @@ import {
   zipArchiveScheme,
 } from "./archive-filesystem-provider";
 import QuickEvalCodeLensProvider from "./quickEvalCodeLensProvider";
-import { CodeQLCliServer, CliVersionConstraint } from "./cli";
+import { CodeQLCliServer } from "./cli";
 import {
   CliConfigListener,
   DistributionConfigListener,
   isCanary,
-  isVariantAnalysisLiveResultsEnabled,
   joinOrderWarningThreshold,
   MAX_QUERIES,
   QueryHistoryConfigListener,
   QueryServerConfigListener,
 } from "./config";
 import { install } from "./languageSupport";
-import { DatabaseItem, DatabaseManager } from "./databases";
-import { DatabaseUI } from "./databases-ui";
+import { DatabaseItem, DatabaseManager } from "./local-databases";
+import { DatabaseUI } from "./local-databases-ui";
 import {
-  TemplateQueryDefinitionProvider,
-  TemplateQueryReferenceProvider,
   TemplatePrintAstProvider,
   TemplatePrintCfgProvider,
+  TemplateQueryDefinitionProvider,
+  TemplateQueryReferenceProvider,
 } from "./contextual/templateProvider";
 import {
   DEFAULT_DISTRIBUTION_VERSION_RANGE,
@@ -65,25 +63,26 @@ import {
 } from "./distribution";
 import {
   findLanguage,
-  tmpDirDisposal,
-  showBinaryChoiceDialog,
   showAndLogErrorMessage,
-  showAndLogWarningMessage,
+  showAndLogExceptionWithTelemetry,
   showAndLogInformationMessage,
+  showAndLogWarningMessage,
+  showBinaryChoiceDialog,
   showInformationMessageWithAction,
   tmpDir,
+  tmpDirDisposal,
 } from "./helpers";
 import { asError, assertNever, getErrorMessage } from "./pure/helpers-pure";
 import { spawnIdeServer } from "./ide-server";
 import { ResultsView } from "./interface";
 import { WebviewReveal } from "./interface-utils";
 import {
-  ideServerLogger,
   extLogger,
+  ideServerLogger,
   ProgressReporter,
   queryServerLogger,
 } from "./common";
-import { QueryHistoryManager } from "./query-history";
+import { QueryHistoryManager } from "./query-history/query-history-manager";
 import { CompletedLocalQueryInfo, LocalQueryInfo } from "./query-results";
 import { QueryServerClient as LegacyQueryServerClient } from "./legacy-query-server/queryserver-client";
 import { QueryServerClient } from "./query-server/queryserver-client";
@@ -97,26 +96,19 @@ import {
   commandRunner,
   commandRunnerWithProgress,
   ProgressCallback,
-  withProgress,
   ProgressUpdate,
+  withProgress,
 } from "./commandRunner";
 import { CodeQlStatusBarHandler } from "./status-bar";
-
-import { Credentials } from "./authentication";
-import { RemoteQueriesManager } from "./remote-queries/remote-queries-manager";
-import { RemoteQueryResult } from "./remote-queries/remote-query-result";
-import { URLSearchParams } from "url";
 import {
   handleDownloadPacks,
   handleInstallPackDependencies,
 } from "./packaging";
-import { HistoryItemLabelProvider } from "./history-item-label-provider";
+import { HistoryItemLabelProvider } from "./query-history/history-item-label-provider";
 import {
-  exportRemoteQueryResults,
-  exportSelectedRemoteQueryResults,
+  exportSelectedVariantAnalysisResults,
   exportVariantAnalysisResults,
-} from "./remote-queries/export-results";
-import { RemoteQuery } from "./remote-queries/remote-query";
+} from "./variant-analysis/export-results";
 import { EvalLogViewer } from "./eval-log-viewer";
 import { SummaryLanguageSupport } from "./log-insights/summary-language-support";
 import { JoinOrderScannerProvider } from "./log-insights/join-order";
@@ -125,19 +117,20 @@ import { createInitialQueryInfo } from "./run-queries-shared";
 import { LegacyQueryRunner } from "./legacy-query-server/legacyRunner";
 import { NewQueryRunner } from "./query-server/query-runner";
 import { QueryRunner } from "./queryRunner";
-import { VariantAnalysisView } from "./remote-queries/variant-analysis-view";
-import { VariantAnalysisViewSerializer } from "./remote-queries/variant-analysis-view-serializer";
+import { VariantAnalysisView } from "./variant-analysis/variant-analysis-view";
+import { VariantAnalysisViewSerializer } from "./variant-analysis/variant-analysis-view-serializer";
 import {
   VariantAnalysis,
   VariantAnalysisScannedRepository,
-} from "./remote-queries/shared/variant-analysis";
-import { VariantAnalysisManager } from "./remote-queries/variant-analysis-manager";
-import { createVariantAnalysisContentProvider } from "./remote-queries/variant-analysis-content-provider";
+} from "./variant-analysis/shared/variant-analysis";
+import { VariantAnalysisManager } from "./variant-analysis/variant-analysis-manager";
+import { createVariantAnalysisContentProvider } from "./variant-analysis/variant-analysis-content-provider";
 import { VSCodeMockGitHubApiServer } from "./mocks/vscode-mock-gh-api-server";
-import { VariantAnalysisResultsManager } from "./remote-queries/variant-analysis-results-manager";
+import { VariantAnalysisResultsManager } from "./variant-analysis/variant-analysis-results-manager";
 import { ExtensionApp } from "./common/vscode/vscode-app";
 import { RepositoriesFilterSortStateWithIds } from "./pure/variant-analysis-filter-sort";
 import { DbModule } from "./databases/db-module";
+import { redactableError } from "./pure/errors";
 
 /**
  * extension.ts
@@ -467,7 +460,7 @@ export async function activate(
     ) {
       registerErrorStubs([checkForUpdatesCommand], (command) => async () => {
         const installActionName = "Install CodeQL CLI";
-        const chosenAction = await void showAndLogErrorMessage(
+        const chosenAction = await showAndLogErrorMessage(
           `Can't execute ${command}: missing CodeQL CLI.`,
           {
             items: [installActionName],
@@ -546,6 +539,8 @@ async function activateWithInstalledDistribution(
   // of activation.
   errorStubs.forEach((stub) => stub.dispose());
 
+  const app = new ExtensionApp(ctx);
+
   void extLogger.log("Initializing configuration listener...");
   const qlConfigurationListener =
     await QueryServerConfigListener.createQueryServerConfigListener(
@@ -555,6 +550,7 @@ async function activateWithInstalledDistribution(
 
   void extLogger.log("Initializing CodeQL cli server...");
   const cliServer = new CodeQLCliServer(
+    app,
     distributionManager,
     new CliConfigListener(),
     extLogger,
@@ -587,11 +583,11 @@ async function activateWithInstalledDistribution(
   ctx.subscriptions.push(dbm);
   void extLogger.log("Initializing database panel.");
   const databaseUI = new DatabaseUI(
+    app,
     dbm,
     qs,
     getContextStoragePath(ctx),
     ctx.extensionPath,
-    () => Credentials.initialize(),
   );
   databaseUI.init();
   ctx.subscriptions.push(databaseUI);
@@ -623,8 +619,6 @@ async function activateWithInstalledDistribution(
 
   void extLogger.log("Initializing variant analysis manager.");
 
-  const app = new ExtensionApp(ctx);
-
   const dbModule = await DbModule.initialize(app);
 
   const variantAnalysisStorageDir = join(
@@ -639,10 +633,11 @@ async function activateWithInstalledDistribution(
 
   const variantAnalysisManager = new VariantAnalysisManager(
     ctx,
+    app,
     cliServer,
     variantAnalysisStorageDir,
     variantAnalysisResultsManager,
-    dbModule?.dbManager, // the dbModule is only needed when variantAnalysisReposPanel is enabled
+    dbModule?.dbManager,
   );
   ctx.subscriptions.push(variantAnalysisManager);
   ctx.subscriptions.push(variantAnalysisResultsManager);
@@ -653,21 +648,11 @@ async function activateWithInstalledDistribution(
     ),
   );
 
-  void extLogger.log("Initializing remote queries manager.");
-  const rqm = new RemoteQueriesManager(
-    ctx,
-    cliServer,
-    queryStorageDir,
-    extLogger,
-  );
-  ctx.subscriptions.push(rqm);
-
   void extLogger.log("Initializing query history.");
   const qhm = new QueryHistoryManager(
     qs,
     dbm,
     localQueryResultsView,
-    rqm,
     variantAnalysisManager,
     evalLogViewer,
     queryStorageDir,
@@ -710,7 +695,11 @@ async function activateWithInstalledDistribution(
     try {
       await compareView.showResults(from, to);
     } catch (e) {
-      void showAndLogErrorMessage(getErrorMessage(e));
+      void showAndLogExceptionWithTelemetry(
+        redactableError(asError(e))`Failed to show results: ${getErrorMessage(
+          e,
+        )}`,
+      );
     }
   }
 
@@ -806,10 +795,10 @@ async function activateWithInstalledDistribution(
         const errorMessage = getErrorMessage(e).includes(
           "Generating qhelp in markdown",
         )
-          ? `Could not generate markdown from ${pathToQhelp}: Bad formatting in .qhelp file.`
-          : `Could not open a preview of the generated file (${absolutePathToMd}).`;
-        void showAndLogErrorMessage(errorMessage, {
-          fullMessage: `${errorMessage}\n${e}`,
+          ? redactableError`Could not generate markdown from ${pathToQhelp}: Bad formatting in .qhelp file.`
+          : redactableError`Could not open a preview of the generated file (${absolutePathToMd}).`;
+        void showAndLogExceptionWithTelemetry(errorMessage, {
+          fullMessage: `${errorMessage}\n${getErrorMessage(e)}`,
         });
       }
     }
@@ -820,17 +809,9 @@ async function activateWithInstalledDistribution(
     const path =
       selectedQuery?.fsPath || window.activeTextEditor?.document.uri.fsPath;
     if (qs !== undefined && path) {
-      if (await cliServer.cliConstraints.supportsResolveQlref()) {
-        const resolved = await cliServer.resolveQlref(path);
-        const uri = Uri.file(resolved.resolvedPath);
-        await window.showTextDocument(uri, { preview: false });
-      } else {
-        void showAndLogErrorMessage(
-          "Jumping from a .qlref file to the .ql file it references is not " +
-            "supported with the CLI version you are running.\n" +
-            `Please upgrade your CLI to version ${CliVersionConstraint.CLI_VERSION_WITH_RESOLVE_QLREF} or later to use this feature.`,
-        );
-      }
+      const resolved = await cliServer.resolveQlref(path);
+      const uri = Uri.file(resolved.resolvedPath);
+      await window.showTextDocument(uri, { preview: false });
     }
   }
 
@@ -844,6 +825,7 @@ async function activateWithInstalledDistribution(
       documentSelector: [
         { language: "ql", scheme: "file" },
         { language: "yaml", scheme: "file", pattern: "**/qlpack.yml" },
+        { language: "yaml", scheme: "file", pattern: "**/codeql-pack.yml" },
       ],
       synchronize: {
         configurationSection: "codeQL",
@@ -1014,19 +996,6 @@ async function activateWithInstalledDistribution(
           });
         }
 
-        if (
-          queryUris.length > 1 &&
-          !(await cliServer.cliConstraints.supportsNonDestructiveUpgrades())
-        ) {
-          // Try to upgrade the current database before running any queries
-          // so that the user isn't confronted with multiple upgrade
-          // requests for each query to run.
-          // Only do it if running multiple queries since this check is
-          // performed on each query run anyway.
-          // Don't do this with non destructive upgrades as the user won't see anything anyway.
-          await databaseUI.tryUpgradeCurrentDatabase(progress, token);
-        }
-
         wrappedProgress({
           maxStep: queryUris.length,
           step: queryUris.length - queriesRemaining,
@@ -1105,8 +1074,6 @@ async function activateWithInstalledDistribution(
     ),
   );
 
-  registerRemoteQueryTextProvider();
-
   // The "runVariantAnalysis" command is internal-only.
   ctx.subscriptions.push(
     commandRunnerWithProgress(
@@ -1123,19 +1090,11 @@ async function activateWithInstalledDistribution(
             message: "Getting credentials",
           });
 
-          if (isVariantAnalysisLiveResultsEnabled()) {
-            await variantAnalysisManager.runVariantAnalysis(
-              uri || window.activeTextEditor?.document.uri,
-              progress,
-              token,
-            );
-          } else {
-            await rqm.runRemoteQuery(
-              uri || window.activeTextEditor?.document.uri,
-              progress,
-              token,
-            );
-          }
+          await variantAnalysisManager.runVariantAnalysis(
+            uri || window.activeTextEditor?.document.uri,
+            progress,
+            token,
+          );
         } else {
           throw new Error(
             "Variant analysis requires the CodeQL Canary version to run.",
@@ -1147,21 +1106,6 @@ async function activateWithInstalledDistribution(
         cancellable: true,
       },
     ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.monitorRemoteQuery",
-      async (queryId: string, query: RemoteQuery, token: CancellationToken) => {
-        await rqm.monitorRemoteQuery(queryId, query, token);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.copyRepoList", async (queryId: string) => {
-      await rqm.copyRemoteQueryRepoListToClipboard(queryId);
-    }),
   );
 
   ctx.subscriptions.push(
@@ -1227,27 +1171,9 @@ async function activateWithInstalledDistribution(
   );
 
   ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.autoDownloadRemoteQueryResults",
-      async (queryResult: RemoteQueryResult, token: CancellationToken) => {
-        await rqm.autoDownloadRemoteQueryResults(queryResult, token);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
     commandRunner("codeQL.exportSelectedVariantAnalysisResults", async () => {
-      await exportSelectedRemoteQueryResults(qhm);
+      await exportSelectedVariantAnalysisResults(qhm);
     }),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.exportRemoteQueryResults",
-      async (queryId: string) => {
-        await exportRemoteQueryResults(qhm, rqm, queryId);
-      },
-    ),
   );
 
   ctx.subscriptions.push(
@@ -1263,6 +1189,7 @@ async function activateWithInstalledDistribution(
           variantAnalysisManager,
           variantAnalysisId,
           filterSort,
+          app.credentials,
           progress,
           token,
         );
@@ -1363,9 +1290,7 @@ async function activateWithInstalledDistribution(
     commandRunnerWithProgress(
       "codeQL.chooseDatabaseGithub",
       async (progress: ProgressCallback, token: CancellationToken) => {
-        const credentials = isCanary()
-          ? await Credentials.initialize()
-          : undefined;
+        const credentials = isCanary() ? app.credentials : undefined;
         await databaseUI.handleChooseDatabaseGithub(
           credentials,
           progress,
@@ -1419,8 +1344,7 @@ async function activateWithInstalledDistribution(
        * Credentials for authenticating to GitHub.
        * These are used when making API calls.
        */
-      const credentials = await Credentials.initialize();
-      const octokit = await credentials.getOctokit();
+      const octokit = await app.credentials.getOctokit();
       const userInfo = await octokit.users.getAuthenticated();
       void showAndLogInformationMessage(
         `Authenticated to GitHub as user: ${userInfo.data.login}`,
@@ -1654,21 +1578,6 @@ async function initializeLogging(ctx: ExtensionContext): Promise<void> {
 }
 
 const checkForUpdatesCommand = "codeQL.checkForUpdatesToCLI";
-
-/**
- * This text provider lets us open readonly files in the editor.
- *
- * TODO: Consolidate this with the 'codeql' text provider in query-history.ts.
- */
-function registerRemoteQueryTextProvider() {
-  workspace.registerTextDocumentContentProvider("remote-query", {
-    provideTextDocumentContent(uri: Uri): ProviderResult<string> {
-      const params = new URLSearchParams(uri.query);
-
-      return params.get("queryText");
-    },
-  });
-}
 
 const avoidVersionCheck = "avoid-version-check-at-startup";
 const lastVersionChecked = "last-version-checked";

@@ -22,10 +22,6 @@ import { CodeQLCliServer, SourceInfo } from "../../../src/cli";
 import { CancellationTokenSource, Uri } from "vscode";
 import { tmpDir } from "../../../src/helpers";
 import {
-  slurpQueryHistory,
-  splatQueryHistory,
-} from "../../../src/query-serialization";
-import {
   formatLegacyMessage,
   QueryInProgress,
 } from "../../../src/legacy-query-server/run-queries";
@@ -34,6 +30,7 @@ import {
   QueryResultType,
 } from "../../../src/pure/legacy-messages";
 import { sleep } from "../../../src/pure/time";
+import { mockedObject } from "../utils/mocking.helpers";
 
 describe("query-results", () => {
   let queryPath: string;
@@ -143,9 +140,9 @@ describe("query-results", () => {
       const completedQuery = fqi.completedQuery!;
 
       const spy = jest.fn();
-      const mockServer = {
+      const mockServer = mockedObject<CodeQLCliServer>({
         sortBqrs: spy,
-      } as unknown as CodeQLCliServer;
+      });
       const sortState = {
         columnIndex: 1,
         sortDirection: SortDirection.desc,
@@ -200,9 +197,9 @@ describe("query-results", () => {
 
       await ensureDir(basename(interpretedResultsPath));
 
-      mockServer = {
+      mockServer = mockedObject<CodeQLCliServer>({
         interpretBqrsSarif: spy,
-      } as unknown as CodeQLCliServer;
+      });
     });
 
     afterEach(async () => {
@@ -436,117 +433,6 @@ describe("query-results", () => {
       },
       2 * 60 * 1000, // up to 2 minutes per test
     );
-  });
-
-  describe("splat and slurp", () => {
-    let infoSuccessRaw: LocalQueryInfo;
-    let infoSuccessInterpreted: LocalQueryInfo;
-    let infoEarlyFailure: LocalQueryInfo;
-    let infoLateFailure: LocalQueryInfo;
-    let infoInprogress: LocalQueryInfo;
-    let allHistory: LocalQueryInfo[];
-
-    beforeEach(() => {
-      infoSuccessRaw = createMockFullQueryInfo(
-        "a",
-        createMockQueryWithResults(
-          `${queryPath}-a`,
-          false,
-          false,
-          "/a/b/c/a",
-          false,
-        ),
-      );
-      infoSuccessInterpreted = createMockFullQueryInfo(
-        "b",
-        createMockQueryWithResults(
-          `${queryPath}-b`,
-          true,
-          true,
-          "/a/b/c/b",
-          false,
-        ),
-      );
-      infoEarlyFailure = createMockFullQueryInfo("c", undefined, true);
-      infoLateFailure = createMockFullQueryInfo(
-        "d",
-        createMockQueryWithResults(
-          `${queryPath}-c`,
-          false,
-          false,
-          "/a/b/c/d",
-          false,
-        ),
-      );
-      infoInprogress = createMockFullQueryInfo("e");
-      allHistory = [
-        infoSuccessRaw,
-        infoSuccessInterpreted,
-        infoEarlyFailure,
-        infoLateFailure,
-        infoInprogress,
-      ];
-    });
-
-    it("should splat and slurp query history", async () => {
-      // the expected results only contains the history with completed queries
-      const expectedHistory = [
-        infoSuccessRaw,
-        infoSuccessInterpreted,
-        infoLateFailure,
-      ];
-
-      const allHistoryPath = join(tmpDir.name, "workspace-query-history.json");
-
-      // splat and slurp
-      await splatQueryHistory(allHistory, allHistoryPath);
-      const allHistoryActual = await slurpQueryHistory(allHistoryPath);
-
-      // the dispose methods will be different. Ignore them.
-      allHistoryActual.forEach((info) => {
-        if (info.t === "local" && info.completedQuery) {
-          const completedQuery = info.completedQuery;
-          (completedQuery as any).dispose = undefined;
-
-          // these fields should be missing on the slurped value
-          // but they are undefined on the original value
-          if (!("logFileLocation" in completedQuery)) {
-            (completedQuery as any).logFileLocation = undefined;
-          }
-          const query = completedQuery.query;
-          if (!("quickEvalPosition" in query)) {
-            (query as any).quickEvalPosition = undefined;
-          }
-        }
-      });
-      expectedHistory.forEach((info) => {
-        if (info.completedQuery) {
-          (info.completedQuery as any).dispose = undefined;
-        }
-      });
-
-      // make the diffs somewhat sane by comparing each element directly
-      for (let i = 0; i < allHistoryActual.length; i++) {
-        expect(allHistoryActual[i]).toEqual(expectedHistory[i]);
-      }
-      expect(allHistoryActual.length).toEqual(expectedHistory.length);
-    });
-
-    it("should handle an invalid query history version", async () => {
-      const badPath = join(tmpDir.name, "bad-query-history.json");
-      writeFileSync(
-        badPath,
-        JSON.stringify({
-          version: 3,
-          queries: allHistory,
-        }),
-        "utf8",
-      );
-
-      const allHistoryActual = await slurpQueryHistory(badPath);
-      // version number is invalid. Should return an empty array.
-      expect(allHistoryActual).toEqual([]);
-    });
   });
 
   function safeDel(file: string) {

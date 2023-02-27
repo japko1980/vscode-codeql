@@ -10,7 +10,8 @@ import {
   resolveQueries,
 } from "../../../../src/contextual/queryResolver";
 import { CodeQLCliServer } from "../../../../src/cli";
-import { DatabaseItem } from "../../../../src/databases";
+import { DatabaseItem } from "../../../../src/local-databases";
+import { mockedObject } from "../../utils/mocking.helpers";
 
 describe("queryResolver", () => {
   let getQlPackForDbschemeSpy: jest.SpiedFunction<
@@ -20,12 +21,11 @@ describe("queryResolver", () => {
     typeof helpers.getPrimaryDbscheme
   >;
 
-  const mockCli = {
-    resolveQueriesInSuite: jest.fn(),
-    cliConstraints: {
-      supportsAllowLibraryPacksInResolveQueries: jest.fn(),
-    },
-  };
+  const resolveQueriesInSuite = jest.fn();
+
+  const mockCli = mockedObject<CodeQLCliServer>({
+    resolveQueriesInSuite,
+  });
 
   beforeEach(() => {
     getQlPackForDbschemeSpy = jest
@@ -40,28 +40,24 @@ describe("queryResolver", () => {
 
     jest.spyOn(helpers, "getOnDiskWorkspaceFolders").mockReturnValue([]);
     jest.spyOn(helpers, "showAndLogErrorMessage").mockResolvedValue(undefined);
-
-    mockCli.cliConstraints.supportsAllowLibraryPacksInResolveQueries.mockReturnValue(
-      true,
-    );
   });
 
   describe("resolveQueries", () => {
     it("should resolve a query", async () => {
-      mockCli.resolveQueriesInSuite.mockReturnValue(["a", "b"]);
+      resolveQueriesInSuite.mockReturnValue(["a", "b"]);
       const result = await resolveQueries(
-        mockCli as unknown as CodeQLCliServer,
+        mockCli,
         { dbschemePack: "my-qlpack", dbschemePackIsLibraryPack: false },
         KeyType.DefinitionQuery,
       );
       expect(result).toEqual(["a", "b"]);
 
-      expect(mockCli.resolveQueriesInSuite).toHaveBeenCalledWith(
+      expect(resolveQueriesInSuite).toHaveBeenCalledWith(
         expect.stringMatching(/\.qls$/),
         [],
       );
 
-      const fileName = mockCli.resolveQueriesInSuite.mock.calls[0][0];
+      const fileName = resolveQueriesInSuite.mock.calls[0][0];
 
       expect(load(await fs.readFile(fileName, "utf-8"))).toEqual([
         {
@@ -75,48 +71,12 @@ describe("queryResolver", () => {
       ]);
     });
 
-    it("should resolve a query from the queries pack if this is an old CLI", async () => {
-      // pretend this is an older CLI
-      mockCli.cliConstraints.supportsAllowLibraryPacksInResolveQueries.mockReturnValue(
-        false,
-      );
-      mockCli.resolveQueriesInSuite.mockReturnValue(["a", "b"]);
-      const result = await resolveQueries(
-        mockCli as unknown as CodeQLCliServer,
-        {
-          dbschemePackIsLibraryPack: true,
-          dbschemePack: "my-qlpack",
-          queryPack: "my-qlpack2",
-        },
-        KeyType.DefinitionQuery,
-      );
-      expect(result).toEqual(["a", "b"]);
-
-      expect(mockCli.resolveQueriesInSuite).toHaveBeenCalledWith(
-        expect.stringMatching(/\.qls$/),
-        [],
-      );
-
-      const fileName = mockCli.resolveQueriesInSuite.mock.calls[0][0];
-
-      expect(load(await fs.readFile(fileName, "utf-8"))).toEqual([
-        {
-          from: "my-qlpack2",
-          queries: ".",
-          include: {
-            kind: "definitions",
-            "tags contain": "ide-contextual-queries/local-definitions",
-          },
-        },
-      ]);
-    });
-
     it("should throw an error when there are no queries found", async () => {
-      mockCli.resolveQueriesInSuite.mockReturnValue([]);
+      resolveQueriesInSuite.mockReturnValue([]);
 
       try {
         await resolveQueries(
-          mockCli as unknown as CodeQLCliServer,
+          mockCli,
           { dbschemePack: "my-qlpack", dbschemePackIsLibraryPack: false },
           KeyType.DefinitionQuery,
         );
@@ -124,7 +84,7 @@ describe("queryResolver", () => {
         expect(true).toBe(false);
       } catch (e) {
         expect(getErrorMessage(e)).toBe(
-          "Couldn't find any queries tagged ide-contextual-queries/local-definitions in any of the following packs: my-qlpack.",
+          'No definitions queries (tagged "ide-contextual-queries/local-definitions") could be found in the current library path (tried searching the following packs: my-qlpack). Try upgrading the CodeQL libraries. If that doesn\'t work, then definitions queries are not yet available for this language.',
         );
       }
     });
@@ -143,10 +103,7 @@ describe("queryResolver", () => {
           },
         },
       } as unknown as DatabaseItem;
-      const result = await qlpackOfDatabase(
-        mockCli as unknown as CodeQLCliServer,
-        db,
-      );
+      const result = await qlpackOfDatabase(mockCli, db);
       expect(result).toEqual({
         dbschemePack: "my-qlpack",
         dbschemePackIsLibraryPack: false,

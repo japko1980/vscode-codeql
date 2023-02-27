@@ -29,11 +29,11 @@ import { isQuickQueryPath } from "./quick-query";
 import { nanoid } from "nanoid";
 import { CodeQLCliServer } from "./cli";
 import { SELECT_QUERY_NAME } from "./contextual/locationFinder";
-import { DatabaseManager } from "./databases";
+import { DatabaseManager } from "./local-databases";
 import { DecodedBqrsChunk } from "./pure/bqrs-cli-types";
 import { extLogger, Logger } from "./common";
 import { generateSummarySymbolsFile } from "./log-insights/summary-parser";
-import { asError } from "./pure/helpers-pure";
+import { getErrorMessage } from "./pure/helpers-pure";
 
 /**
  * run-queries.ts
@@ -68,7 +68,7 @@ function findQueryEvalLogEndSummaryFile(resultPath: string): string {
 
 export class QueryEvaluationInfo {
   /**
-   * Note that in the {@link slurpQueryHistory} method, we create a QueryEvaluationInfo instance
+   * Note that in the {@link deserializeQueryHistory} method, we create a QueryEvaluationInfo instance
    * by explicitly setting the prototype in order to avoid calling this constructor.
    */
   constructor(
@@ -270,9 +270,10 @@ export class QueryEvaluationInfo {
       );
       return this.evalLogSummaryPath;
     } catch (e) {
-      const err = asError(e);
       void showAndLogWarningMessage(
-        `Failed to generate human-readable structured evaluator log summary. Reason: ${err.message}`,
+        `Failed to generate human-readable structured evaluator log summary. Reason: ${getErrorMessage(
+          e,
+        )}`,
       );
       return undefined;
     }
@@ -516,7 +517,7 @@ export async function determineSelectedQuery(
   let quickEvalPosition: messages.Position | undefined = undefined;
   let quickEvalText: string | undefined = undefined;
   if (quickEval) {
-    if (editor == undefined) {
+    if (editor === undefined) {
       throw new Error("Can't run quick evaluation without an active editor.");
     }
     if (editor.document.fileName !== queryPath) {

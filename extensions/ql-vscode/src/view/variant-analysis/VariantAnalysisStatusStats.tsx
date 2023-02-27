@@ -2,7 +2,7 @@ import * as React from "react";
 import styled from "styled-components";
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react";
 import { formatDate } from "../../pure/date";
-import { VariantAnalysisStatus } from "../../remote-queries/shared/variant-analysis";
+import { VariantAnalysisStatus } from "../../variant-analysis/shared/variant-analysis";
 
 export type VariantAnalysisStatusStatsProps = {
   variantAnalysisStatus: VariantAnalysisStatus;
@@ -27,13 +27,15 @@ export const VariantAnalysisStatusStats = ({
   completedAt,
   onViewLogsClick,
 }: VariantAnalysisStatusStatsProps) => {
-  if (variantAnalysisStatus === VariantAnalysisStatus.InProgress) {
-    return <Icon className="codicon codicon-loading codicon-modifier-spin" />;
-  }
-
   return (
     <Container>
-      <span>{completedAt !== undefined ? formatDate(completedAt) : "-"}</span>
+      {variantAnalysisStatus === VariantAnalysisStatus.InProgress ? (
+        <div>
+          <Icon className="codicon codicon-loading codicon-modifier-spin" />
+        </div>
+      ) : (
+        <span>{completedAt !== undefined ? formatDate(completedAt) : "-"}</span>
+      )}
       {onViewLogsClick && (
         <VSCodeLink onClick={onViewLogsClick}>View logs</VSCodeLink>
       )}

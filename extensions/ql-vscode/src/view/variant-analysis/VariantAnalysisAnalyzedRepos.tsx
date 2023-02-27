@@ -6,7 +6,7 @@ import {
   VariantAnalysis,
   VariantAnalysisScannedRepositoryResult,
   VariantAnalysisScannedRepositoryState,
-} from "../../remote-queries/shared/variant-analysis";
+} from "../../variant-analysis/shared/variant-analysis";
 import {
   filterAndSortRepositoriesWithResultsByName,
   RepositoriesFilterSortState,
@@ -89,7 +89,7 @@ export const VariantAnalysisAnalyzedRepos = ({
             key={repository.repository.id}
             repository={repository.repository}
             status={repository.analysisStatus}
-            downloadStatus={state?.downloadStatus}
+            downloadState={state}
             resultCount={repository.resultCount}
             interpretedResults={results?.interpretedResults}
             rawResults={results?.rawResults}

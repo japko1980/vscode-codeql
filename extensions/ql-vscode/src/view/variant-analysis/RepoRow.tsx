@@ -6,7 +6,8 @@ import {
   isCompletedAnalysisRepoStatus,
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepositoryDownloadStatus,
-} from "../../remote-queries/shared/variant-analysis";
+  VariantAnalysisScannedRepositoryState,
+} from "../../variant-analysis/shared/variant-analysis";
 import { formatDecimal } from "../../pure/number";
 import {
   Codicon,
@@ -15,15 +16,17 @@ import {
   SuccessIcon,
   WarningIcon,
 } from "../common";
-import { RepositoryWithMetadata } from "../../remote-queries/shared/repository";
+import { RepositoryWithMetadata } from "../../variant-analysis/shared/repository";
 import {
   AnalysisAlert,
   AnalysisRawResults,
-} from "../../remote-queries/shared/analysis-result";
+} from "../../variant-analysis/shared/analysis-result";
 import { vscode } from "../vscode-api";
 import { AnalyzedRepoItemContent } from "./AnalyzedRepoItemContent";
 import StarCount from "../common/StarCount";
 import { LastUpdated } from "../common/LastUpdated";
+import { useTelemetryOnChange } from "../common/telemetry";
+import { DeterminateProgressRing } from "../common/DeterminateProgressRing";
 
 // This will ensure that these icons have a className which we can use in the TitleContainer
 const ExpandCollapseCodicon = styled(Codicon)``;
@@ -90,7 +93,7 @@ export type RepoRowProps = {
   repository: Partial<RepositoryWithMetadata> &
     Pick<RepositoryWithMetadata, "fullName">;
   status?: VariantAnalysisRepoStatus;
-  downloadStatus?: VariantAnalysisScannedRepositoryDownloadStatus;
+  downloadState?: VariantAnalysisScannedRepositoryState;
   resultCount?: number;
 
   interpretedResults?: AnalysisAlert[];
@@ -127,7 +130,7 @@ const canSelect = (
   status: VariantAnalysisRepoStatus | undefined,
   downloadStatus: VariantAnalysisScannedRepositoryDownloadStatus | undefined,
 ) =>
-  status == VariantAnalysisRepoStatus.Succeeded &&
+  status === VariantAnalysisRepoStatus.Succeeded &&
   downloadStatus === VariantAnalysisScannedRepositoryDownloadStatus.Succeeded;
 
 const isExpandableContentLoaded = (
@@ -157,10 +160,12 @@ const isExpandableContentLoaded = (
   return resultsLoaded;
 };
 
+const filterRepoRowExpandedTelemetry = (v: boolean) => v;
+
 export const RepoRow = ({
   repository,
   status,
-  downloadStatus,
+  downloadState,
   resultCount,
   interpretedResults,
   rawResults,
@@ -168,6 +173,9 @@ export const RepoRow = ({
   onSelectedChange,
 }: RepoRowProps) => {
   const [isExpanded, setExpanded] = useState(false);
+  useTelemetryOnChange(isExpanded, "variant-analysis-repo-row-expanded", {
+    filterTelemetryOnValue: filterRepoRowExpandedTelemetry,
+  });
   const resultsLoaded = !!interpretedResults || !!rawResults;
   const [resultsLoading, setResultsLoading] = useState(false);
 
@@ -179,7 +187,7 @@ export const RepoRow = ({
     if (
       resultsLoaded ||
       status !== VariantAnalysisRepoStatus.Succeeded ||
-      downloadStatus !==
+      downloadState?.downloadStatus !==
         VariantAnalysisScannedRepositoryDownloadStatus.Succeeded
     ) {
       setExpanded((oldIsExpanded) => !oldIsExpanded);
@@ -197,7 +205,8 @@ export const RepoRow = ({
     resultsLoaded,
     repository.fullName,
     status,
-    downloadStatus,
+    downloadState,
+    setExpanded,
   ]);
 
   useEffect(() => {
@@ -205,7 +214,7 @@ export const RepoRow = ({
       setResultsLoading(false);
       setExpanded(true);
     }
-  }, [resultsLoaded, resultsLoading]);
+  }, [resultsLoaded, resultsLoading, setExpanded]);
 
   const onClickCheckbox = useCallback((e: React.MouseEvent) => {
     // Prevent calling the onClick event of the container, which would toggle the expanded state
@@ -227,10 +236,11 @@ export const RepoRow = ({
     [onSelectedChange, repository],
   );
 
-  const disabled = !canExpand(status, downloadStatus) || resultsLoading;
+  const disabled =
+    !canExpand(status, downloadState?.downloadStatus) || resultsLoading;
   const expandableContentLoaded = isExpandableContentLoaded(
     status,
-    downloadStatus,
+    downloadState?.downloadStatus,
     resultsLoaded,
   );
 
@@ -245,7 +255,9 @@ export const RepoRow = ({
           onChange={onChangeCheckbox}
           onClick={onClickCheckbox}
           checked={selected}
-          disabled={!repository.id || !canSelect(status, downloadStatus)}
+          disabled={
+            !repository.id || !canSelect(status, downloadState?.downloadStatus)
+          }
         />
         {isExpanded && (
           <ExpandCollapseCodicon name="chevron-down" label="Collapse" />
@@ -271,11 +283,13 @@ export const RepoRow = ({
           )}
           {!status && <WarningIcon />}
         </span>
-        {downloadStatus ===
+        {downloadState?.downloadStatus ===
           VariantAnalysisScannedRepositoryDownloadStatus.InProgress && (
-          <LoadingIcon label="Downloading" />
+          <DeterminateProgressRing
+            percent={downloadState.downloadPercentage ?? 0}
+          />
         )}
-        {downloadStatus ===
+        {downloadState?.downloadStatus ===
           VariantAnalysisScannedRepositoryDownloadStatus.Failed && (
           <WarningIcon label="Failed to download the results" />
         )}
@@ -289,7 +303,7 @@ export const RepoRow = ({
       {isExpanded && expandableContentLoaded && (
         <AnalyzedRepoItemContent
           status={status}
-          downloadStatus={downloadStatus}
+          downloadStatus={downloadState?.downloadStatus}
           interpretedResults={interpretedResults}
           rawResults={rawResults}
         />

@@ -1,15 +1,14 @@
-import { createHash } from "crypto";
-import { readFile } from "fs-extra";
 import * as tmp from "tmp-promise";
 import { basename, join } from "path";
 import { CancellationToken, Uri } from "vscode";
 import { LSPErrorCodes, ResponseError } from "vscode-languageclient";
 
 import * as cli from "../cli";
-import { DatabaseItem } from "../databases";
+import { DatabaseItem } from "../local-databases";
 import {
   getOnDiskWorkspaceFolders,
   showAndLogErrorMessage,
+  showAndLogExceptionWithTelemetry,
   showAndLogWarningMessage,
   tryGetQueryMetadata,
   upgradesTmpDir,
@@ -20,12 +19,10 @@ import { extLogger } from "../common";
 import * as messages from "../pure/legacy-messages";
 import { InitialQueryInfo, LocalQueryInfo } from "../query-results";
 import * as qsClient from "./queryserver-client";
-import { getErrorMessage } from "../pure/helpers-pure";
-import {
-  compileDatabaseUpgradeSequence,
-  upgradeDatabaseExplicit,
-} from "./upgrades";
+import { asError, getErrorMessage } from "../pure/helpers-pure";
+import { compileDatabaseUpgradeSequence } from "./upgrades";
 import { QueryEvaluationInfo, QueryWithResults } from "../run-queries-shared";
+import { redactableError } from "../pure/errors";
 
 /**
  * A collection of evaluation-time information about a query,
@@ -36,7 +33,7 @@ import { QueryEvaluationInfo, QueryWithResults } from "../run-queries-shared";
 export class QueryInProgress {
   public queryEvalInfo: QueryEvaluationInfo;
   /**
-   * Note that in the {@link slurpQueryHistory} method, we create a QueryEvaluationInfo instance
+   * Note that in the {@link deserializeQueryHistory} method, we create a QueryEvaluationInfo instance
    * by explicitly setting the prototype in order to avoid calling this constructor.
    */
   constructor(
@@ -233,57 +230,6 @@ export async function clearCacheInDatabase(
   return qs.sendRequest(messages.clearCache, params, token, progress);
 }
 
-/**
- * Compare the dbscheme implied by the query `query` and that of the current database.
- * - If they are compatible, do nothing.
- * - If they are incompatible but the database can be upgraded, suggest that upgrade.
- * - If they are incompatible and the database cannot be upgraded, throw an error.
- */
-async function checkDbschemeCompatibility(
-  cliServer: cli.CodeQLCliServer,
-  qs: qsClient.QueryServerClient,
-  query: QueryInProgress,
-  qlProgram: messages.QlProgram,
-  dbItem: DatabaseItem,
-  progress: ProgressCallback,
-  token: CancellationToken,
-): Promise<void> {
-  const searchPath = getOnDiskWorkspaceFolders();
-
-  if (dbItem.contents?.dbSchemeUri !== undefined) {
-    const { finalDbscheme } = await cliServer.resolveUpgrades(
-      dbItem.contents.dbSchemeUri.fsPath,
-      searchPath,
-      false,
-    );
-    const hash = async function (filename: string): Promise<string> {
-      return createHash("sha256")
-        .update(await readFile(filename))
-        .digest("hex");
-    };
-
-    // At this point, we have learned about three dbschemes:
-
-    // the dbscheme of the actual database we're querying.
-    const dbschemeOfDb = await hash(dbItem.contents.dbSchemeUri.fsPath);
-
-    // the dbscheme of the query we're running, including the library we've resolved it to use.
-    const dbschemeOfLib = await hash(query.queryDbscheme);
-
-    // the database we're able to upgrade to
-    const upgradableTo = await hash(finalDbscheme);
-
-    if (upgradableTo != dbschemeOfLib) {
-      reportNoUpgradePath(qlProgram, query);
-    }
-
-    if (upgradableTo == dbschemeOfLib && dbschemeOfDb != dbschemeOfLib) {
-      // Try to upgrade the database
-      await upgradeDatabaseExplicit(qs, dbItem, progress, token);
-    }
-  }
-}
-
 function reportNoUpgradePath(
   qlProgram: messages.QlProgram,
   query: QueryInProgress,
@@ -309,11 +255,8 @@ async function compileNonDestructiveUpgrade(
     throw new Error("Database is invalid, and cannot be upgraded.");
   }
 
-  // When packaging is used, dependencies may exist outside of the workspace and they are always on the resolved search path.
-  // When packaging is not used, all dependencies are in the workspace.
-  const upgradesPath = (await qs.cliServer.cliConstraints.supportsPackaging())
-    ? qlProgram.libraryPath
-    : getOnDiskWorkspaceFolders();
+  // Dependencies may exist outside of the workspace and they are always on the resolved search path.
+  const upgradesPath = qlProgram.libraryPath;
 
   const { scripts, matchesTarget } = await qs.cliServer.resolveUpgrades(
     dbItem.contents.dbSchemeUri.fsPath,
@@ -370,7 +313,7 @@ export async function compileAndRunQueryAgainstDatabase(
 
   if (!packConfig.dbscheme) {
     throw new Error(
-      "Could not find a database scheme for this query. Please check that you have a valid qlpack.yml file for this query, which refers to a database scheme either in the `dbscheme` field or through one of its dependencies.",
+      "Could not find a database scheme for this query. Please check that you have a valid qlpack.yml or codeql-pack.yml file for this query, which refers to a database scheme either in the `dbscheme` field or through one of its dependencies.",
     );
   }
 
@@ -380,7 +323,7 @@ export async function compileAndRunQueryAgainstDatabase(
   // This test will produce confusing results if we ever change the name of the database schema files.
   const querySchemaName = basename(packConfig.dbscheme);
   const dbSchemaName = basename(dbItem.contents.dbSchemeUri.fsPath);
-  if (querySchemaName != dbSchemaName) {
+  if (querySchemaName !== dbSchemaName) {
     void extLogger.log(
       `Query schema was ${querySchemaName}, but database schema was ${dbSchemaName}.`,
     );
@@ -409,33 +352,28 @@ export async function compileAndRunQueryAgainstDatabase(
   const metadata = await tryGetQueryMetadata(cliServer, qlProgram.queryPath);
 
   let availableMlModels: cli.MlModelInfo[] = [];
-  if (!(await cliServer.cliConstraints.supportsResolveMlModels())) {
-    void extLogger.log(
-      "Resolving ML models is unsupported by this version of the CLI. Running the query without any ML models.",
-    );
-  } else {
-    try {
-      availableMlModels = (
-        await cliServer.resolveMlModels(
-          diskWorkspaceFolders,
-          initialInfo.queryPath,
-        )
-      ).models;
-      if (availableMlModels.length) {
-        void extLogger.log(
-          `Found available ML models at the following paths: ${availableMlModels
-            .map((x) => `'${x.path}'`)
-            .join(", ")}.`,
-        );
-      } else {
-        void extLogger.log("Did not find any available ML models.");
-      }
-    } catch (e) {
-      const message =
-        `Couldn't resolve available ML models for ${qlProgram.queryPath}. Running the ` +
-        `query without any ML models: ${e}.`;
-      void showAndLogErrorMessage(message);
+  try {
+    availableMlModels = (
+      await cliServer.resolveMlModels(
+        diskWorkspaceFolders,
+        initialInfo.queryPath,
+      )
+    ).models;
+    if (availableMlModels.length) {
+      void extLogger.log(
+        `Found available ML models at the following paths: ${availableMlModels
+          .map((x) => `'${x.path}'`)
+          .join(", ")}.`,
+      );
+    } else {
+      void extLogger.log("Did not find any available ML models.");
     }
+  } catch (e) {
+    void showAndLogExceptionWithTelemetry(
+      redactableError(
+        asError(e),
+      )`Couldn't resolve available ML models for ${qlProgram.queryPath}. Running the query without any ML models: ${e}.`,
+    );
   }
 
   const hasMetadataFile = await dbItem.hasMetadataFile();
@@ -452,36 +390,23 @@ export async function compileAndRunQueryAgainstDatabase(
 
   let upgradeDir: tmp.DirectoryResult | undefined;
   try {
-    let upgradeQlo;
-    if (await cliServer.cliConstraints.supportsNonDestructiveUpgrades()) {
-      upgradeDir = await tmp.dir({ dir: upgradesTmpDir, unsafeCleanup: true });
-      upgradeQlo = await compileNonDestructiveUpgrade(
-        qs,
-        upgradeDir,
-        query,
-        qlProgram,
-        dbItem,
-        progress,
-        token,
-      );
-    } else {
-      await checkDbschemeCompatibility(
-        cliServer,
-        qs,
-        query,
-        qlProgram,
-        dbItem,
-        progress,
-        token,
-      );
-    }
+    upgradeDir = await tmp.dir({ dir: upgradesTmpDir, unsafeCleanup: true });
+    const upgradeQlo = await compileNonDestructiveUpgrade(
+      qs,
+      upgradeDir,
+      query,
+      qlProgram,
+      dbItem,
+      progress,
+      token,
+    );
     let errors;
     try {
       errors = await query.compile(qs, qlProgram, progress, token);
     } catch (e) {
       if (
         e instanceof ResponseError &&
-        e.code == LSPErrorCodes.RequestCancelled
+        e.code === LSPErrorCodes.RequestCancelled
       ) {
         return createSyntheticResult(query, "Query cancelled");
       } else {
@@ -500,9 +425,11 @@ export async function compileAndRunQueryAgainstDatabase(
         queryInfo,
       );
       if (result.resultType !== messages.QueryResultType.SUCCESS) {
-        const message = result.message || "Failed to run query";
-        void extLogger.log(message);
-        void showAndLogErrorMessage(message);
+        const error = result.message
+          ? redactableError`${result.message}`
+          : redactableError`Failed to run query`;
+        void extLogger.log(error.fullMessage);
+        void showAndLogExceptionWithTelemetry(error);
       }
       const message = formatLegacyMessage(result);
 
@@ -510,7 +437,7 @@ export async function compileAndRunQueryAgainstDatabase(
         query: query.queryEvalInfo,
         message,
         result,
-        successful: result.resultType == messages.QueryResultType.SUCCESS,
+        successful: result.resultType === messages.QueryResultType.SUCCESS,
         logFileLocation: result.logFileLocation,
         dispose: () => {
           qs.logger.removeAdditionalLogLocation(result.logFileLocation);

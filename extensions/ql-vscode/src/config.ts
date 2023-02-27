@@ -56,15 +56,6 @@ export class Setting {
       .getConfiguration(this.parent.qualifiedName)
       .update(this.name, value, target);
   }
-
-  inspect<T>(): InspectionResult<T> | undefined {
-    if (this.parent === undefined) {
-      throw new Error("Cannot update the value of a root setting.");
-    }
-    return workspace
-      .getConfiguration(this.parent.qualifiedName)
-      .inspect(this.name);
-  }
 }
 
 export interface InspectionResult<T> {
@@ -91,6 +82,10 @@ export const GLOBAL_ENABLE_TELEMETRY = new Setting(
   "enableTelemetry",
   GLOBAL_TELEMETRY_SETTING,
 );
+
+export function newTelemetryEnabled(): boolean {
+  return true;
+}
 
 // Distribution configuration
 const DISTRIBUTION_SETTING = new Setting("cli", ROOT_SETTING);
@@ -348,7 +343,7 @@ export class QueryServerConfigListener
     if (memory === null) {
       return undefined;
     }
-    if (memory == 0 || typeof memory !== "number") {
+    if (memory === 0 || typeof memory !== "number") {
       void extLogger.log(
         `Ignoring value '${memory}' for setting ${MEMORY_SETTING.qualifiedName}`,
       );
@@ -479,48 +474,6 @@ export const NO_CACHE_AST_VIEWER = new Setting(
 const VARIANT_ANALYSIS_SETTING = new Setting("variantAnalysis", ROOT_SETTING);
 
 /**
- * Lists of GitHub repositories that you want to query remotely via the "Run Variant Analysis" command.
- * Note: This command is only available for internal users.
- *
- * This setting should be a JSON object where each key is a user-specified name (string),
- * and the value is an array of GitHub repositories (of the form `<owner>/<repo>`).
- */
-const REMOTE_REPO_LISTS = new Setting(
-  "repositoryLists",
-  VARIANT_ANALYSIS_SETTING,
-);
-
-export function getRemoteRepositoryLists():
-  | Record<string, string[]>
-  | undefined {
-  return REMOTE_REPO_LISTS.getValue<Record<string, string[]>>() || undefined;
-}
-
-export async function setRemoteRepositoryLists(
-  lists: Record<string, string[]> | undefined,
-) {
-  await REMOTE_REPO_LISTS.updateValue(lists, ConfigurationTarget.Global);
-}
-
-/**
- * Path to a file that contains lists of GitHub repositories that you want to query remotely via
- * the "Run Variant Analysis" command.
- * Note: This command is only available for internal users.
- *
- * This setting should be a path to a JSON file that contains a JSON object where each key is a
- * user-specified name (string), and the value is an array of GitHub repositories
- * (of the form `<owner>/<repo>`).
- */
-const REPO_LISTS_PATH = new Setting(
-  "repositoryListsPath",
-  VARIANT_ANALYSIS_SETTING,
-);
-
-export function getRemoteRepositoryListsPath(): string | undefined {
-  return REPO_LISTS_PATH.getValue<string>() || undefined;
-}
-
-/**
  * The name of the "controller" repository that you want to use with the "Run Variant Analysis" command.
  * Note: This command is only available for internal users.
  *
@@ -537,6 +490,27 @@ export function getRemoteControllerRepo(): string | undefined {
 
 export async function setRemoteControllerRepo(repo: string | undefined) {
   await REMOTE_CONTROLLER_REPO.updateValue(repo, ConfigurationTarget.Global);
+}
+
+export interface VariantAnalysisConfig {
+  controllerRepo: string | undefined;
+  onDidChangeConfiguration?: Event<void>;
+}
+
+export class VariantAnalysisConfigListener
+  extends ConfigListener
+  implements VariantAnalysisConfig
+{
+  protected handleDidChangeConfiguration(e: ConfigurationChangeEvent): void {
+    this.handleDidChangeConfigurationForRelevantSettings(
+      [VARIANT_ANALYSIS_SETTING],
+      e,
+    );
+  }
+
+  public get controllerRepo(): string | undefined {
+    return getRemoteControllerRepo();
+  }
 }
 
 /**
@@ -556,18 +530,6 @@ export function isIntegrationTestMode() {
 
 export function isVariantAnalysisLiveResultsEnabled(): boolean {
   return true;
-}
-
-/**
- * A flag indicating whether to use the new "variant analysis repositories" panel.
- */
-const VARIANT_ANALYSIS_REPOS_PANEL = new Setting(
-  "repositoriesPanel",
-  VARIANT_ANALYSIS_SETTING,
-);
-
-export function isVariantAnalysisReposPanelEnabled(): boolean {
-  return !!VARIANT_ANALYSIS_REPOS_PANEL.getValue<boolean>();
 }
 
 // Settings for mocking the GitHub API.
@@ -616,4 +578,17 @@ export class MockGitHubApiConfigListener
 
 export function getMockGitHubApiServerScenariosPath(): string | undefined {
   return MOCK_GH_API_SERVER_SCENARIOS_PATH.getValue<string>();
+}
+
+/**
+ * Enables features that are specific to the codespaces-codeql template workspace from
+ * https://github.com/github/codespaces-codeql.
+ */
+export const CODESPACES_TEMPLATE = new Setting(
+  "codespacesTemplate",
+  ROOT_SETTING,
+);
+
+export function isCodespacesTemplate() {
+  return !!CODESPACES_TEMPLATE.getValue<boolean>();
 }

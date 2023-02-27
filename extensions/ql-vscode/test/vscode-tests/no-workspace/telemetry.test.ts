@@ -11,7 +11,10 @@ import {
 } from "../../../src/telemetry";
 import { UserCancellationException } from "../../../src/commandRunner";
 import { ENABLE_TELEMETRY } from "../../../src/config";
+import * as Config from "../../../src/config";
 import { createMockExtensionContext } from "./index";
+import { vscodeGetConfigurationMock } from "../test-config";
+import { redactableError } from "../../../src/pure/errors";
 
 // setting preferences can trigger lots of background activity
 // so need to bump up the timeout of this test.
@@ -39,6 +42,8 @@ describe("telemetry reporting", () => {
   >;
 
   beforeEach(async () => {
+    vscodeGetConfigurationMock.mockRestore();
+
     try {
       // in case a previous test has accidentally activated this extension,
       // need to disable it first.
@@ -386,6 +391,85 @@ describe("telemetry reporting", () => {
     // now, we should have to click through the telemetry requestor again
     expect(ctx.globalState.get("telemetry-request-viewed")).toBe(false);
     expect(showInformationMessageSpy).toBeCalledTimes(1);
+  });
+
+  describe("when new telementry is not enabled", () => {
+    beforeEach(async () => {
+      jest.spyOn(Config, "newTelemetryEnabled").mockReturnValue(false);
+    });
+
+    it("should not send a ui-interaction telementry event", async () => {
+      await telemetryListener.initialize();
+
+      telemetryListener.sendUIInteraction("test");
+
+      expect(sendTelemetryEventSpy).not.toBeCalled();
+    });
+
+    it("should not send an error telementry event", async () => {
+      await telemetryListener.initialize();
+
+      telemetryListener.sendError(redactableError`test`);
+
+      expect(sendTelemetryEventSpy).not.toBeCalled();
+    });
+  });
+
+  describe("when new telementry is enabled", () => {
+    beforeEach(async () => {
+      jest.spyOn(Config, "newTelemetryEnabled").mockReturnValue(true);
+    });
+
+    it("should send a ui-interaction telementry event", async () => {
+      await telemetryListener.initialize();
+
+      telemetryListener.sendUIInteraction("test");
+
+      expect(sendTelemetryEventSpy).toHaveBeenCalledWith(
+        "ui-interaction",
+        {
+          name: "test",
+          isCanary,
+        },
+        {},
+      );
+    });
+
+    it("should send an error telementry event", async () => {
+      await telemetryListener.initialize();
+
+      telemetryListener.sendError(redactableError`test`);
+
+      expect(sendTelemetryEventSpy).toHaveBeenCalledWith(
+        "error",
+        {
+          message: "test",
+          isCanary,
+          stack: expect.any(String),
+        },
+        {},
+      );
+    });
+  });
+
+  it("should redact error message contents", async () => {
+    jest.spyOn(Config, "newTelemetryEnabled").mockReturnValue(true);
+    await telemetryListener.initialize();
+
+    telemetryListener.sendError(
+      redactableError`test message with secret information: ${42} and more ${"secret"} parts`,
+    );
+
+    expect(sendTelemetryEventSpy).toHaveBeenCalledWith(
+      "error",
+      {
+        message:
+          "test message with secret information: [REDACTED] and more [REDACTED] parts",
+        isCanary,
+        stack: expect.any(String),
+      },
+      {},
+    );
   });
 
   async function enableTelemetry(section: string, value: boolean | undefined) {

@@ -25,11 +25,14 @@ choose to go through some of the Optional Test Cases.
 1. Open the [UnsafeJQueryPlugin query](https://github.com/github/codeql/blob/main/javascript/ql/src/Security/CWE-079/UnsafeJQueryPlugin.ql).
 2. Run a MRVA against the following repo list:
 ```
-"test-repo-list": [
-    "angular-cn/ng-nice",
-    "apache/hadoop",
-    "apache/hive"
-]
+{
+   "name": "test-repo-list",
+   "repositories": [
+      "angular-cn/ng-nice",
+      "apache/hadoop",
+      "apache/hive"
+   ]
+}
 ```
 3. Check that a notification message pops up and the results view is opened.
 4. Check the query history. It should:
@@ -48,9 +51,7 @@ choose to go through some of the Optional Test Cases.
 
 1. Open the [ReDoS query](https://github.com/github/codeql/blob/main/javascript/ql/src/Performance/ReDoS.ql).
 2. Run a MRVA against the "Top 10" repositories.
-3. Check the notification message. It should:
-   - Show the number of repos that are going to be queried
-   - Provide a link to the actions workflow
+3. Check that there is a notification message.
 4. Check the query history. It should:
    - Show that an item has been added to the query history
    - The item should be marked as "in progress".
@@ -74,9 +75,9 @@ choose to go through some of the Optional Test Cases.
    - Check that exporting results works
    - Check that sorting results works
    - Check that copying repo lists works 
-2. Open the query directory (containing results):
+2. Open the query results directory:
    - Check that the correct directory is opened and there are results in it
-3. Open variant analysis on GitHub
+3. View logs
    - Check that the correct workflow is opened
 
 ### Test Case 5: MRVA - Canceling a variant analysis run
@@ -162,7 +163,7 @@ with this since it has quite a limited number of actions you can do.
 6. Can open query that produced these results 
    1. When the file still exists and has not moved 
    2. When the file does not exist
-7. Cannot open variant analysis on github
+7. Cannot view logs
 8. Cannot copy repository list
 9. Cannot export results
 10. Cannot select to create a gist
@@ -186,7 +187,7 @@ with this since it has quite a limited number of actions you can do.
 7. Can open query that produced these results
     1. When the file still exists and has not moved
     2. When the file does not exist
-8. Can open variant analysis on github
+8. Can view logs
 9. Can copy repository list
    1. Text is copied to clipboard
    2. Text is a valid repository list
@@ -244,7 +245,7 @@ This requires running a MRVA query and seeing the results view.
    1. By name 
    2. By results 
    3. By stars 
-   4. By last commit
+   4. By last updated
 9. Can filter repos
 10. Shows correct statistics 
     1. Total number of results 
@@ -278,3 +279,40 @@ This requires running a MRVA query and seeing the results view.
 #### Test case 4: When variant analysis is in "failed" or "canceled" state
 1. Can view logs
 1. Results for finished queries are still downloaded.
+
+### MRVA repositories panel
+
+1. Add a list
+1. Add a database at the top level
+1. Add a database to a list
+1. Add a the same database at a top-level and in a list
+1. Delete a list
+1. Delete a database from the top level
+1. Delete a database from a list
+1. Add an owner
+1. Remove an owner
+1. Rename a list
+1. Open on GitHub
+1. Select a list (via "Select" button and via context menu action)
+1. Run MRVA against a user-defined list
+1. Run MRVA against a top-N list
+1. Run MRVA against an owner
+1. Run MRVA against a database
+1. Copy repo list
+1. Open config file
+1. Make changes via config file (ensure JSON schema is helping out)
+1. Close and re-open VS Code (ensure lists are there)
+1. Collapse/expand tree nodes
+
+Error cases that trigger an error notification:
+1. Try to add a list with a name that already exists 
+1. Try to add a top-level database that already exists
+1. Try to add a database in a list that already exists in the list
+
+Error cases that show an error in the panel (and only the edit button should be visible):
+1. Edit the db config file directly and save invalid JSON
+1. Edit the db config file directly and save valid JSON but invalid config (e.g. add an unknown property)
+1. Edit the db config file directly and save two lists with the same name 
+
+Cases where there the welcome view is shown:
+1. No controller repo is set in the user's settings JSON. 

@@ -16,16 +16,16 @@ import { basename, join } from "path";
 import * as Octokit from "@octokit/rest";
 import { retry } from "@octokit/plugin-retry";
 
-import { DatabaseManager, DatabaseItem } from "./databases";
+import { DatabaseManager, DatabaseItem } from "./local-databases";
 import { showAndLogInformationMessage, tmpDir } from "./helpers";
 import { reportStreamProgress, ProgressCallback } from "./commandRunner";
 import { extLogger } from "./common";
-import { Credentials } from "./authentication";
 import { getErrorMessage } from "./pure/helpers-pure";
 import {
   getNwoFromGitHubUrl,
   isValidGitHubNwo,
 } from "./common/github-url-identifier-helper";
+import { Credentials } from "./common/authentication";
 
 /**
  * Prompts a user to fetch a database from a remote location. Database is assumed to be an archive file.
@@ -321,7 +321,7 @@ async function readAndUnzip(
     step: 9,
     message: `Unzipping into ${basename(unzipPath)}`,
   });
-  if (cli && (await cli.cliConstraints.supportsDatabaseUnbundle())) {
+  if (cli) {
     // Use the `database unbundle` command if the installed cli version supports it
     await cli.databaseUnbundle(zipFile, unzipPath);
   } else {

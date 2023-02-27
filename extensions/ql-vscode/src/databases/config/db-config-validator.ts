@@ -1,33 +1,40 @@
 import { readJsonSync } from "fs-extra";
 import { resolve } from "path";
-import Ajv from "ajv";
-import { DbConfig } from "./db-config";
-import { findDuplicateStrings } from "../../text-utils";
+import Ajv, { ValidateFunction } from "ajv";
+import { clearLocalDbConfig, DbConfig } from "./db-config";
+import { findDuplicateStrings } from "../../pure/text-utils";
 import {
   DbConfigValidationError,
   DbConfigValidationErrorKind,
 } from "../db-validation-errors";
 
 export class DbConfigValidator {
-  private readonly schema: any;
+  private readonly validateSchemaFn: ValidateFunction;
 
   constructor(extensionPath: string) {
-    const schemaPath = resolve(
-      extensionPath,
-      "workspace-databases-schema.json",
-    );
-    this.schema = readJsonSync(schemaPath);
+    const schemaPath = resolve(extensionPath, "databases-schema.json");
+    const schema = readJsonSync(schemaPath);
+    const schemaValidator = new Ajv({ allErrors: true });
+    this.validateSchemaFn = schemaValidator.compile(schema);
   }
 
   public validate(dbConfig: DbConfig): DbConfigValidationError[] {
-    const ajv = new Ajv({ allErrors: true });
-    ajv.validate(this.schema, dbConfig);
+    const localDbs = clearLocalDbConfig(dbConfig);
 
-    if (ajv.errors) {
-      return ajv.errors.map((error) => ({
+    this.validateSchemaFn(dbConfig);
+
+    if (this.validateSchemaFn.errors) {
+      return this.validateSchemaFn.errors.map((error) => ({
         kind: DbConfigValidationErrorKind.InvalidConfig,
         message: `${error.instancePath} ${error.message}`,
       }));
+    }
+
+    // Add any local db config back so that we have a config
+    // object that respects its type and validation can happen
+    // as normal.
+    if (localDbs) {
+      dbConfig.databases.local = localDbs;
     }
 
     return [

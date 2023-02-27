@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "databases": {
+    "variantAnalysis": {
+      "repositoryLists": [
+        {
+          "name": "repoList1",
+          "repositories": ["foo/bar", "foo/baz"]
+        }
+      ],
+      "owners": [],
+      "repositories": ["owner/repo1", "owner/repo2", "owner/repo3"]
+    }
+  },
+  "selected": {
+    "kind": "variantAnalysisUserDefinedList",
+    "listName": "repoList1"
+  }
+}

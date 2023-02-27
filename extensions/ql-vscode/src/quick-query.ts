@@ -10,7 +10,7 @@ import {
 } from "vscode";
 import { LSPErrorCodes, ResponseError } from "vscode-languageclient";
 import { CodeQLCliServer } from "./cli";
-import { DatabaseUI } from "./databases-ui";
+import { DatabaseUI } from "./local-databases-ui";
 import {
   getInitialQueryContents,
   getPrimaryDbscheme,
@@ -19,6 +19,7 @@ import {
 } from "./helpers";
 import { ProgressCallback, UserCancellationException } from "./commandRunner";
 import { getErrorMessage } from "./pure/helpers-pure";
+import { FALLBACK_QLPACK_FILENAME, getQlPackPath } from "./pure/ql";
 
 const QUICK_QUERIES_DIR_NAME = "quick-queries";
 const QUICK_QUERY_QUERY_NAME = "quick-query.ql";
@@ -112,7 +113,7 @@ export async function displayQuickQuery(
     const dbscheme = await getPrimaryDbscheme(datasetFolder);
     const qlpack = (await getQlPackForDbscheme(cliServer, dbscheme))
       .dbschemePack;
-    const qlPackFile = join(queriesDir, "qlpack.yml");
+    const qlPackFile = await getQlPackPath(queriesDir);
     const qlFile = join(queriesDir, QUICK_QUERY_QUERY_NAME);
     const shouldRewrite = await checkShouldRewrite(qlPackFile, qlpack);
 
@@ -126,7 +127,7 @@ export async function displayQuickQuery(
         },
       };
       await writeFile(
-        qlPackFile,
+        qlPackFile ?? join(queriesDir, FALLBACK_QLPACK_FILENAME),
         QLPACK_FILE_HEADER + dump(quickQueryQlpackYaml),
         "utf8",
       );
@@ -149,7 +150,7 @@ export async function displayQuickQuery(
   } catch (e) {
     if (
       e instanceof ResponseError &&
-      e.code == LSPErrorCodes.RequestCancelled
+      e.code === LSPErrorCodes.RequestCancelled
     ) {
       throw new UserCancellationException(getErrorMessage(e));
     } else {
@@ -158,7 +159,13 @@ export async function displayQuickQuery(
   }
 }
 
-async function checkShouldRewrite(qlPackFile: string, newDependency: string) {
+async function checkShouldRewrite(
+  qlPackFile: string | undefined,
+  newDependency: string,
+) {
+  if (!qlPackFile) {
+    return true;
+  }
   if (!(await pathExists(qlPackFile))) {
     return true;
   }
