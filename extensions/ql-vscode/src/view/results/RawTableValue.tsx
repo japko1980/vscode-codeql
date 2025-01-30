@@ -1,7 +1,7 @@
-import * as React from "react";
-
-import { renderLocation } from "./result-table-utils";
-import { CellValue } from "../../pure/bqrs-cli-types";
+import { Location } from "./locations/Location";
+import { RawNumberValue } from "../common/RawNumberValue";
+import type { CellValue } from "../../common/raw-result-types";
+import { assertNever } from "../../common/helpers-pure";
 
 interface Props {
   value: CellValue;
@@ -9,21 +9,28 @@ interface Props {
   onSelected?: () => void;
 }
 
-export default function RawTableValue(props: Props): JSX.Element {
-  const rawValue = props.value;
-  if (
-    typeof rawValue === "string" ||
-    typeof rawValue === "number" ||
-    typeof rawValue === "boolean"
-  ) {
-    return <span>{renderLocation(undefined, rawValue.toString())}</span>;
+export default function RawTableValue({
+  value,
+  databaseUri,
+  onSelected,
+}: Props): React.JSX.Element {
+  switch (value.type) {
+    case "boolean":
+      return <span>{value.value.toString()}</span>;
+    case "number":
+      return <RawNumberValue value={value.value} />;
+    case "string":
+      return <Location label={value.value} />;
+    case "entity":
+      return (
+        <Location
+          loc={value.value.url}
+          label={value.value.label}
+          databaseUri={databaseUri}
+          onClick={onSelected}
+        />
+      );
+    default:
+      assertNever(value);
   }
-
-  return renderLocation(
-    rawValue.url,
-    rawValue.label,
-    props.databaseUri,
-    undefined,
-    props.onSelected,
-  );
 }

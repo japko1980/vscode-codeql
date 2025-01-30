@@ -1,26 +1,27 @@
-import * as React from "react";
-
-import { ComponentMeta, ComponentStory } from "@storybook/react";
+import type { Meta, StoryFn } from "@storybook/react";
 
 import { VariantAnalysis as VariantAnalysisComponent } from "../../view/variant-analysis/VariantAnalysis";
-import {
+import type {
   VariantAnalysis as VariantAnalysisDomainModel,
+  VariantAnalysisScannedRepositoryResult,
+  VariantAnalysisScannedRepositoryState,
+} from "../../variant-analysis/shared/variant-analysis";
+import {
   VariantAnalysisFailureReason,
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepositoryDownloadStatus,
-  VariantAnalysisScannedRepositoryResult,
-  VariantAnalysisScannedRepositoryState,
   VariantAnalysisStatus,
 } from "../../variant-analysis/shared/variant-analysis";
 import { createMockVariantAnalysis } from "../../../test/factories/variant-analysis/shared/variant-analysis";
 import { createMockRepositoryWithMetadata } from "../../../test/factories/variant-analysis/shared/repository";
+import { ColumnKind } from "../../common/raw-result-types";
 
 export default {
   title: "Variant Analysis/Variant Analysis",
   component: VariantAnalysisComponent,
-} as ComponentMeta<typeof VariantAnalysisComponent>;
+} as Meta<typeof VariantAnalysisComponent>;
 
-const Template: ComponentStory<typeof VariantAnalysisComponent> = (args) => (
+const Template: StoryFn<typeof VariantAnalysisComponent> = (args) => (
   <VariantAnalysisComponent {...args} />
 );
 
@@ -207,26 +208,22 @@ const repoResults: VariantAnalysisScannedRepositoryResult[] = [
     variantAnalysisId: 1,
     repositoryId: 1,
     rawResults: {
-      schema: {
+      resultSet: {
         name: "#select",
-        rows: 1,
+        totalRowCount: 1,
         columns: [
           {
-            kind: "i",
+            kind: ColumnKind.Integer,
           },
         ],
-      },
-      resultSet: {
-        schema: {
-          name: "#select",
-          rows: 1,
-          columns: [
+        rows: [
+          [
             {
-              kind: "i",
+              type: "number",
+              value: 60688,
             },
           ],
-        },
-        rows: [[60688]],
+        ],
       },
       fileLinkPrefix:
         "https://github.com/octodemo/hello-world-1/blob/59a2a6c7d9dde7a6ecb77c2f7e8197d6925c143b",

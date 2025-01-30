@@ -1,18 +1,14 @@
-import * as React from "react";
+import type { Meta, StoryFn } from "@storybook/react";
 
-import { ComponentStory, ComponentMeta } from "@storybook/react";
-
-import {
-  CodePaths,
-  SuccessIcon as SuccessIconComponent,
-} from "../../../view/common";
+import type { CodePaths } from "../../../view/common";
+import { SuccessIcon as SuccessIconComponent } from "../../../view/common";
 
 export default {
   title: "Icon/Success Icon",
   component: SuccessIconComponent,
-} as ComponentMeta<typeof CodePaths>;
+} as Meta<typeof CodePaths>;
 
-const Template: ComponentStory<typeof SuccessIconComponent> = (args) => (
+const Template: StoryFn<typeof SuccessIconComponent> = (args) => (
   <SuccessIconComponent {...args} />
 );
 

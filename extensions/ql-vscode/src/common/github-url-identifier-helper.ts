@@ -1,4 +1,4 @@
-import { OWNER_REGEX, REPO_REGEX } from "../pure/helpers-pure";
+import { OWNER_REGEX, REPO_REGEX } from "./helpers-pure";
 
 /**
  * Checks if a string is a valid GitHub NWO.
@@ -29,37 +29,45 @@ function validGitHubNwoOrOwner(
 
 /**
  * Extracts an NWO from a GitHub URL.
- * @param githubUrl The GitHub repository URL
+ * @param repositoryUrl The GitHub repository URL
+ * @param githubUrl The URL of the GitHub instance
  * @return The corresponding NWO, or undefined if the URL is not valid
  */
-export function getNwoFromGitHubUrl(githubUrl: string): string | undefined {
-  return getNwoOrOwnerFromGitHubUrl(githubUrl, "nwo");
+export function getNwoFromGitHubUrl(
+  repositoryUrl: string,
+  githubUrl: URL,
+): string | undefined {
+  return getNwoOrOwnerFromGitHubUrl(repositoryUrl, githubUrl, "nwo");
 }
 
 /**
  * Extracts an owner from a GitHub URL.
- * @param githubUrl The GitHub repository URL
+ * @param repositoryUrl The GitHub repository URL
+ * @param githubUrl The URL of the GitHub instance
  * @return The corresponding Owner, or undefined if the URL is not valid
  */
-export function getOwnerFromGitHubUrl(githubUrl: string): string | undefined {
-  return getNwoOrOwnerFromGitHubUrl(githubUrl, "owner");
+export function getOwnerFromGitHubUrl(
+  repositoryUrl: string,
+  githubUrl: URL,
+): string | undefined {
+  return getNwoOrOwnerFromGitHubUrl(repositoryUrl, githubUrl, "owner");
 }
 
 function getNwoOrOwnerFromGitHubUrl(
-  githubUrl: string,
+  repositoryUrl: string,
+  githubUrl: URL,
   kind: "owner" | "nwo",
 ): string | undefined {
+  const validHostnames = [githubUrl.hostname, `www.${githubUrl.hostname}`];
+
   try {
     let paths: string[];
-    const urlElements = githubUrl.split("/");
-    if (
-      urlElements[0] === "github.com" ||
-      urlElements[0] === "www.github.com"
-    ) {
-      paths = githubUrl.split("/").slice(1);
+    const urlElements = repositoryUrl.split("/");
+    if (validHostnames.includes(urlElements[0])) {
+      paths = repositoryUrl.split("/").slice(1);
     } else {
-      const uri = new URL(githubUrl);
-      if (uri.hostname !== "github.com" && uri.hostname !== "www.github.com") {
+      const uri = new URL(repositoryUrl);
+      if (!validHostnames.includes(uri.hostname)) {
         return;
       }
       paths = uri.pathname.split("/").filter((segment: string) => segment);
@@ -70,7 +78,7 @@ function getNwoOrOwnerFromGitHubUrl(
     }
     const nwo = `${paths[0]}/${paths[1]}`;
     return paths[1] ? nwo : undefined;
-  } catch (e) {
+  } catch {
     // Ignore the error here, since we catch failures at a higher level.
     return;
   }

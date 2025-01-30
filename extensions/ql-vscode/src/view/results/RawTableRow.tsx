@@ -1,17 +1,15 @@
-import * as React from "react";
-import { ResultRow } from "../../pure/bqrs-cli-types";
 import { selectedRowClassName, zebraStripe } from "./result-table-utils";
 import RawTableValue from "./RawTableValue";
-import { ScrollIntoViewHelper } from "./scroll-into-view-helper";
+import type { Row } from "../../common/raw-result-types";
 
 interface Props {
   rowIndex: number;
-  row: ResultRow;
+  row: Row;
   databaseUri: string;
   className?: string;
   selectedColumn?: number;
+  selectedItemRef?: React.Ref<HTMLTableCellElement>;
   onSelected?: (row: number, column: number) => void;
-  scroller?: ScrollIntoViewHelper;
 }
 
 export default function RawTableRow(props: Props) {
@@ -26,7 +24,7 @@ export default function RawTableRow(props: Props) {
         const isSelected = props.selectedColumn === columnIndex;
         return (
           <td
-            ref={props.scroller?.ref(isSelected)}
+            ref={isSelected ? props.selectedItemRef : undefined}
             key={columnIndex}
             {...(isSelected ? { className: selectedRowClassName } : {})}
           >

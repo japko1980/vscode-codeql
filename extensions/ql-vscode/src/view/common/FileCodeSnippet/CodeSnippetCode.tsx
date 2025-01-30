@@ -1,11 +1,10 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 
-import { HighlightedRegion } from "../../../variant-analysis/shared/analysis-result";
+import type { HighlightedRegion } from "../../../variant-analysis/shared/analysis-result";
 import {
   parseHighlightedLine,
   shouldHighlightLine,
-} from "../../../pure/sarif-utils";
+} from "../../../common/sarif-utils";
 
 const replaceSpaceAndTabChar = (text: string) =>
   text.replaceAll(" ", "\u00a0").replaceAll("\t", "\u00a0\u00a0\u00a0\u00a0");

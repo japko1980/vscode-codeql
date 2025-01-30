@@ -1,6 +1,4 @@
-import * as React from "react";
-
-import { ComponentMeta, ComponentStory } from "@storybook/react";
+import type { Meta, StoryFn } from "@storybook/react";
 
 import { VariantAnalysisContainer } from "../../view/variant-analysis/VariantAnalysisContainer";
 import { VariantAnalysisStatus } from "../../variant-analysis/shared/variant-analysis";
@@ -36,9 +34,9 @@ export default {
       },
     },
   },
-} as ComponentMeta<typeof VariantAnalysisActions>;
+} as Meta<typeof VariantAnalysisActions>;
 
-const Template: ComponentStory<typeof VariantAnalysisActions> = (args) => (
+const Template: StoryFn<typeof VariantAnalysisActions> = (args) => (
   <VariantAnalysisActions {...args} />
 );
 
@@ -71,4 +69,10 @@ export const Failed = Template.bind({});
 Failed.args = {
   ...InProgress.args,
   variantAnalysisStatus: VariantAnalysisStatus.Failed,
+};
+
+export const Canceling = Template.bind({});
+Canceling.args = {
+  ...InProgress.args,
+  variantAnalysisStatus: VariantAnalysisStatus.Canceling,
 };

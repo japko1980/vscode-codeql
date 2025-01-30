@@ -1,42 +1,48 @@
 import { window } from "vscode";
-import { App, AppMode } from "../common/app";
-import { extLogger } from "../common";
-import { DisposableObject } from "../pure/disposable-object";
+import type { App } from "../common/app";
+import { extLogger } from "../common/logging/vscode";
+import { DisposableObject } from "../common/disposable-object";
 import { DbConfigStore } from "./config/db-config-store";
 import { DbManager } from "./db-manager";
 import { DbPanel } from "./ui/db-panel";
 import { DbSelectionDecorationProvider } from "./ui/db-selection-decoration-provider";
-import { isCanary } from "../config";
+import type { DatabasePanelCommands } from "../common/commands";
+import { VariantAnalysisConfigListener } from "../config";
 
 export class DbModule extends DisposableObject {
   public readonly dbManager: DbManager;
   private readonly dbConfigStore: DbConfigStore;
+  private dbPanel: DbPanel | undefined;
 
   private constructor(app: App) {
     super();
 
     this.dbConfigStore = new DbConfigStore(app);
-    this.dbManager = new DbManager(app, this.dbConfigStore);
+    this.dbManager = this.push(
+      new DbManager(
+        app,
+        this.dbConfigStore,
+        new VariantAnalysisConfigListener(),
+      ),
+    );
   }
 
-  public static async initialize(app: App): Promise<DbModule | undefined> {
-    if (DbModule.shouldEnableModule(app.mode)) {
-      const dbModule = new DbModule(app);
-      app.subscriptions.push(dbModule);
+  public static async initialize(app: App): Promise<DbModule> {
+    const dbModule = new DbModule(app);
+    app.subscriptions.push(dbModule);
 
-      await dbModule.initialize(app);
-      return dbModule;
-    }
-
-    return undefined;
+    await dbModule.initialize(app);
+    return dbModule;
   }
 
-  private static shouldEnableModule(app: AppMode): boolean {
-    if (app === AppMode.Development || app === AppMode.Test) {
-      return true;
+  public getCommands(): DatabasePanelCommands {
+    if (!this.dbPanel) {
+      throw new Error("Database panel not initialized");
     }
 
-    return isCanary();
+    return {
+      ...this.dbPanel.getCommands(),
+    };
   }
 
   private async initialize(app: App): Promise<void> {
@@ -44,10 +50,9 @@ export class DbModule extends DisposableObject {
 
     await this.dbConfigStore.initialize();
 
-    const dbPanel = new DbPanel(this.dbManager, app.credentials);
-    await dbPanel.initialize();
+    this.dbPanel = new DbPanel(app, this.dbManager);
 
-    this.push(dbPanel);
+    this.push(this.dbPanel);
     this.push(this.dbConfigStore);
 
     const dbSelectionDecorationProvider = new DbSelectionDecorationProvider();

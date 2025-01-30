@@ -1,10 +1,12 @@
-import { DbItem, DbItemKind, isSelectableDbItem } from "../db-item";
+import type { DbItem } from "../db-item";
+import { DbItemKind, isSelectableDbItem } from "../db-item";
 
-export type DbTreeViewItemAction =
+type DbTreeViewItemAction =
   | "canBeSelected"
   | "canBeRemoved"
   | "canBeRenamed"
-  | "canBeOpenedOnGitHub";
+  | "canBeOpenedOnGitHub"
+  | "canImportCodeSearch";
 
 export function getDbItemActions(dbItem: DbItem): DbTreeViewItemAction[] {
   const actions: DbTreeViewItemAction[] = [];
@@ -21,23 +23,19 @@ export function getDbItemActions(dbItem: DbItem): DbTreeViewItemAction[] {
   if (canBeOpenedOnGitHub(dbItem)) {
     actions.push("canBeOpenedOnGitHub");
   }
-
+  if (canImportCodeSearch(dbItem)) {
+    actions.push("canImportCodeSearch");
+  }
   return actions;
 }
 
 const dbItemKindsThatCanBeRemoved = [
-  DbItemKind.LocalList,
   DbItemKind.RemoteUserDefinedList,
-  DbItemKind.LocalDatabase,
   DbItemKind.RemoteRepo,
   DbItemKind.RemoteOwner,
 ];
 
-const dbItemKindsThatCanBeRenamed = [
-  DbItemKind.LocalList,
-  DbItemKind.RemoteUserDefinedList,
-  DbItemKind.LocalDatabase,
-];
+const dbItemKindsThatCanBeRenamed = [DbItemKind.RemoteUserDefinedList];
 
 const dbItemKindsThatCanBeOpenedOnGitHub = [
   DbItemKind.RemoteOwner,
@@ -60,12 +58,19 @@ function canBeOpenedOnGitHub(dbItem: DbItem): boolean {
   return dbItemKindsThatCanBeOpenedOnGitHub.includes(dbItem.kind);
 }
 
-export function getGitHubUrl(dbItem: DbItem): string | undefined {
+function canImportCodeSearch(dbItem: DbItem): boolean {
+  return DbItemKind.RemoteUserDefinedList === dbItem.kind;
+}
+
+export function getGitHubUrl(
+  dbItem: DbItem,
+  githubUrl: URL,
+): string | undefined {
   switch (dbItem.kind) {
     case DbItemKind.RemoteOwner:
-      return `https://github.com/${dbItem.ownerName}`;
+      return new URL(`/${dbItem.ownerName}`, githubUrl).toString();
     case DbItemKind.RemoteRepo:
-      return `https://github.com/${dbItem.repoFullName}`;
+      return new URL(`/${dbItem.repoFullName}`, githubUrl).toString();
     default:
       return undefined;
   }

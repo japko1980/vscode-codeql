@@ -1,17 +1,15 @@
 import { join, resolve } from "path";
 import { readdir, readFile } from "fs-extra";
 
-import {
-  generateVariantAnalysisMarkdown,
-  MarkdownFile,
-} from "../../../src/variant-analysis/markdown-generation";
-import {
+import type { MarkdownFile } from "../../../src/variant-analysis/markdown-generation";
+import { generateVariantAnalysisMarkdown } from "../../../src/variant-analysis/markdown-generation";
+import type {
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepository,
   VariantAnalysisScannedRepositoryResult,
 } from "../../../src/variant-analysis/shared/variant-analysis";
 import { QueryLanguage } from "../../../src/common/query-language";
-import {
+import type {
   AnalysisAlert,
   AnalysisRawResults,
 } from "../../../src/variant-analysis/shared/analysis-result";
@@ -27,12 +25,12 @@ describe(generateVariantAnalysisMarkdown.name, () => {
     it("should generate markdown file for each repo with results", async () => {
       const actualFiles = await generateVariantAnalysisMarkdown(
         {
+          language: QueryLanguage.Javascript,
           query: {
             name: "Shell command built from environment values",
             filePath:
               "c:\\git-repo\\vscode-codeql-starter\\ql\\javascript\\ql\\src\\Security\\CWE-078\\ShellCommandInjectionFromEnvironment.ql",
             text: '/**\n * @name Shell command built from environment values\n * @description Building a shell command string with values from the enclosing\n *              environment may cause subtle bugs or vulnerabilities.\n * @kind path-problem\n * @problem.severity warning\n * @security-severity 6.3\n * @precision high\n * @id js/shell-command-injection-from-environment\n * @tags correctness\n *       security\n *       external/cwe/cwe-078\n *       external/cwe/cwe-088\n */\n\nimport javascript\nimport DataFlow::PathGraph\nimport semmle.javascript.security.dataflow.ShellCommandInjectionFromEnvironmentQuery\n\nfrom\n  Configuration cfg, DataFlow::PathNode source, DataFlow::PathNode sink, DataFlow::Node highlight,\n  Source sourceNode\nwhere\n  sourceNode = source.getNode() and\n  cfg.hasFlowPath(source, sink) and\n  if cfg.isSinkWithHighlight(sink.getNode(), _)\n  then cfg.isSinkWithHighlight(sink.getNode(), highlight)\n  else highlight = sink.getNode()\nselect highlight, source, sink, "This shell command depends on an uncontrolled $@.", sourceNode,\n  sourceNode.getSourceType()\n',
-            language: QueryLanguage.Javascript,
           },
         },
         getResults(pathProblemAnalysesResults),
@@ -51,12 +49,12 @@ describe(generateVariantAnalysisMarkdown.name, () => {
     it("should generate markdown file for each repo with results", async () => {
       const actualFiles = await generateVariantAnalysisMarkdown(
         {
+          language: QueryLanguage.Javascript,
           query: {
             name: "Inefficient regular expression",
             filePath:
               "c:\\git-repo\\vscode-codeql-starter\\ql\\javascript\\ql\\src\\Performance\\ReDoS.ql",
             text: '/**\n * @name Inefficient regular expression\n * @description A regular expression that requires exponential time to match certain inputs\n *              can be a performance bottleneck, and may be vulnerable to denial-of-service\n *              attacks.\n * @kind problem\n * @problem.severity error\n * @security-severity 7.5\n * @precision high\n * @id js/redos\n * @tags security\n *       external/cwe/cwe-1333\n *       external/cwe/cwe-730\n *       external/cwe/cwe-400\n */\n\nimport javascript\nimport semmle.javascript.security.performance.ReDoSUtil\nimport semmle.javascript.security.performance.ExponentialBackTracking\n\nfrom RegExpTerm t, string pump, State s, string prefixMsg\nwhere hasReDoSResult(t, pump, s, prefixMsg)\nselect t,\n  "This part of the regular expression may cause exponential backtracking on strings " + prefixMsg +\n    "containing many repetitions of \'" + pump + "\'."\n',
-            language: QueryLanguage.Javascript,
           },
         },
         getResults(problemAnalysesResults),
@@ -75,11 +73,11 @@ describe(generateVariantAnalysisMarkdown.name, () => {
     it("should generate markdown file for each repo with results", async () => {
       const actualFiles = await generateVariantAnalysisMarkdown(
         {
+          language: QueryLanguage.Javascript,
           query: {
             name: "Contradictory guard nodes",
             filePath: "c:\\Users\\foo\\bar\\quick-query.ql",
             text: '/**\n * @name Contradictory guard nodes\n * \n * @description Snippet from "UselessComparisonTest.ql"\n */\n\nimport javascript\n\n/**\n * Holds if there are any contradictory guard nodes in `container`.\n *\n * We use this to restrict reachability analysis to a small set of containers.\n */\npredicate hasContradictoryGuardNodes(StmtContainer container) {\n  exists(ConditionGuardNode guard |\n    RangeAnalysis::isContradictoryGuardNode(guard) and\n    container = guard.getContainer()\n  )\n}\n\nfrom StmtContainer c\nwhere hasContradictoryGuardNodes(c)\nselect c, c.getNumLines()',
-            language: QueryLanguage.Javascript,
           },
         },
         getResults(rawResultsAnalysesResults),

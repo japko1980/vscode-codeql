@@ -1,26 +1,29 @@
-import * as React from "react";
 import { useMemo } from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
+import type {
+  VariantAnalysis,
+  VariantAnalysisScannedRepositoryState,
+} from "../../variant-analysis/shared/variant-analysis";
 import {
   getSkippedRepoCount,
   getTotalResultCount,
   hasRepoScanCompleted,
-  VariantAnalysis,
+  isRepoScanSuccessful,
   VariantAnalysisScannedRepositoryDownloadStatus,
-  VariantAnalysisScannedRepositoryState,
 } from "../../variant-analysis/shared/variant-analysis";
 import { QueryDetails } from "./QueryDetails";
 import { VariantAnalysisActions } from "./VariantAnalysisActions";
 import { VariantAnalysisStats } from "./VariantAnalysisStats";
-import { parseDate } from "../../pure/date";
-import { basename } from "../common/path";
+import { parseDate } from "../../common/date";
+import { basename } from "../../common/path";
+import type { RepositoriesFilterSortState } from "../../variant-analysis/shared/variant-analysis-filter-sort";
 import {
   defaultFilterSortState,
   filterAndSortRepositoriesWithResults,
-  RepositoriesFilterSortState,
-} from "../../pure/variant-analysis-filter-sort";
+} from "../../variant-analysis/shared/variant-analysis-filter-sort";
+import { ViewTitle } from "../common";
 
-export type VariantAnalysisHeaderProps = {
+type VariantAnalysisHeaderProps = {
   variantAnalysis: VariantAnalysis;
   repositoryStates?: VariantAnalysisScannedRepositoryState[];
   filterSortState?: RepositoriesFilterSortState;
@@ -48,6 +51,29 @@ const Row = styled.div`
   align-items: center;
 `;
 
+const QueryInfo = ({
+  variantAnalysis,
+  onOpenQueryFileClick,
+  onViewQueryTextClick,
+}: {
+  variantAnalysis: VariantAnalysis;
+  onOpenQueryFileClick: () => void;
+  onViewQueryTextClick: () => void;
+}) => {
+  if (variantAnalysis.queries) {
+    return <ViewTitle>{variantAnalysis.queries?.count} queries</ViewTitle>;
+  } else {
+    return (
+      <QueryDetails
+        queryName={variantAnalysis.query.name}
+        queryFileName={basename(variantAnalysis.query.filePath)}
+        onOpenQueryFileClick={onOpenQueryFileClick}
+        onViewQueryTextClick={onViewQueryTextClick}
+      />
+    );
+  }
+};
+
 export const VariantAnalysisHeader = ({
   variantAnalysis,
   repositoryStates,
@@ -69,11 +95,17 @@ export const VariantAnalysisHeader = ({
         ?.length ?? 0
     );
   }, [variantAnalysis.scannedRepos]);
+  const successfulRepositoryCount = useMemo(() => {
+    return (
+      variantAnalysis.scannedRepos?.filter((repo) => isRepoScanSuccessful(repo))
+        ?.length ?? 0
+    );
+  }, [variantAnalysis.scannedRepos]);
   const resultCount = useMemo(() => {
     return getTotalResultCount(variantAnalysis.scannedRepos);
   }, [variantAnalysis.scannedRepos]);
-  const hasSkippedRepos = useMemo(() => {
-    return getSkippedRepoCount(variantAnalysis.skippedRepos) > 0;
+  const skippedRepositoryCount = useMemo(() => {
+    return getSkippedRepoCount(variantAnalysis.skippedRepos);
   }, [variantAnalysis.skippedRepos]);
   const filteredRepositories = useMemo(() => {
     return filterAndSortRepositoriesWithResults(variantAnalysis.scannedRepos, {
@@ -109,9 +141,8 @@ export const VariantAnalysisHeader = ({
   return (
     <Container>
       <Row>
-        <QueryDetails
-          queryName={variantAnalysis.query.name}
-          queryFileName={basename(variantAnalysis.query.filePath)}
+        <QueryInfo
+          variantAnalysis={variantAnalysis}
           onOpenQueryFileClick={onOpenQueryFileClick}
           onViewQueryTextClick={onViewQueryTextClick}
         />
@@ -124,14 +155,22 @@ export const VariantAnalysisHeader = ({
           stopQueryDisabled={!variantAnalysis.actionsWorkflowRunId}
           exportResultsDisabled={!hasDownloadedRepos}
           copyRepositoryListDisabled={!hasReposWithResults}
+          hasFilteredRepositories={
+            variantAnalysis.scannedRepos?.length !==
+            filteredRepositories?.length
+          }
+          hasSelectedRepositories={
+            selectedRepositoryIds && selectedRepositoryIds.length > 0
+          }
         />
       </Row>
       <VariantAnalysisStats
         variantAnalysisStatus={variantAnalysis.status}
         totalRepositoryCount={totalScannedRepositoryCount}
         completedRepositoryCount={completedRepositoryCount}
+        successfulRepositoryCount={successfulRepositoryCount}
+        skippedRepositoryCount={skippedRepositoryCount}
         resultCount={resultCount}
-        hasWarnings={hasSkippedRepos}
         createdAt={parseDate(variantAnalysis.createdAt)}
         completedAt={parseDate(variantAnalysis.completedAt)}
         onViewLogsClick={onViewLogsClick}

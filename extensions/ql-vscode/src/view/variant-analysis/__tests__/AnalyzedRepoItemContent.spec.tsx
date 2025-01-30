@@ -1,19 +1,19 @@
-import * as React from "react";
 import { render as reactRender, screen } from "@testing-library/react";
 import {
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepositoryDownloadStatus,
 } from "../../../variant-analysis/shared/variant-analysis";
-import {
-  AnalyzedRepoItemContent,
-  AnalyzedRepoItemContentProps,
-} from "../AnalyzedRepoItemContent";
+import type { AnalyzedRepoItemContentProps } from "../AnalyzedRepoItemContent";
+import { AnalyzedRepoItemContent } from "../AnalyzedRepoItemContent";
+import { ResultFormat } from "../../../variant-analysis/shared/variant-analysis-result-format";
+import { ColumnKind } from "../../../common/raw-result-types";
 
 describe(AnalyzedRepoItemContent.name, () => {
   const render = (props: Partial<AnalyzedRepoItemContentProps> = {}) => {
     return reactRender(
       <AnalyzedRepoItemContent
         status={VariantAnalysisRepoStatus.Succeeded}
+        resultFormat={ResultFormat.Alerts}
         {...props}
       />,
     );
@@ -62,26 +62,50 @@ describe(AnalyzedRepoItemContent.name, () => {
     render({
       status: VariantAnalysisRepoStatus.Succeeded,
       rawResults: {
-        schema: {
+        resultSet: {
           name: "#select",
-          rows: 1,
+          totalRowCount: 2,
           columns: [
             {
-              kind: "i",
+              kind: ColumnKind.Integer,
+            },
+            {
+              kind: ColumnKind.String,
+            },
+            {
+              kind: ColumnKind.Boolean,
             },
           ],
-        },
-        resultSet: {
-          schema: {
-            name: "#select",
-            rows: 1,
-            columns: [
+          rows: [
+            [
               {
-                kind: "i",
+                type: "number",
+                value: 60688,
+              },
+              {
+                type: "string",
+                value: "foo",
+              },
+              {
+                type: "boolean",
+                value: true,
               },
             ],
-          },
-          rows: [[60688]],
+            [
+              {
+                type: "number",
+                value: 5,
+              },
+              {
+                type: "string",
+                value: "bar",
+              },
+              {
+                type: "boolean",
+                value: false,
+              },
+            ],
+          ],
         },
         fileLinkPrefix:
           "https://github.com/octodemo/hello-world-1/blob/59a2a6c7d9dde7a6ecb77c2f7e8197d6925c143b",
@@ -90,7 +114,12 @@ describe(AnalyzedRepoItemContent.name, () => {
       },
     });
 
-    expect(screen.getByText("60688")).toBeInTheDocument();
+    expect(screen.getByText("60,688")).toBeInTheDocument();
+    expect(screen.getByText("foo")).toBeInTheDocument();
+    expect(screen.getByText("true")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("bar")).toBeInTheDocument();
+    expect(screen.getByText("false")).toBeInTheDocument();
   });
 
   it("renders the failed state", () => {

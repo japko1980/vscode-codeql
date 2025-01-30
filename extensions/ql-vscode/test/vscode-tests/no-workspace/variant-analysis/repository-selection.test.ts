@@ -1,10 +1,10 @@
 import { getRepositorySelection } from "../../../../src/variant-analysis/repository-selection";
-import { DbManager } from "../../../../src/databases/db-manager";
-import {
+import type { DbManager } from "../../../../src/databases/db-manager";
+import type {
   DbItem,
-  DbItemKind,
   RemoteRepoDbItem,
 } from "../../../../src/databases/db-item";
+import { DbItemKind } from "../../../../src/databases/db-item";
 
 describe("repository selection", () => {
   it("should throw error when no database item is selected", async () => {
@@ -12,16 +12,6 @@ describe("repository selection", () => {
 
     await expect(getRepositorySelection(dbManager)).rejects.toThrow(
       "Please select a remote database to run the query against.",
-    );
-  });
-
-  it("should log error when local database item is selected", async () => {
-    const dbManager = setUpDbManager({
-      kind: DbItemKind.LocalDatabase,
-    } as DbItem);
-
-    await expect(getRepositorySelection(dbManager)).rejects.toThrow(
-      "Local databases and lists are not supported yet.",
     );
   });
 

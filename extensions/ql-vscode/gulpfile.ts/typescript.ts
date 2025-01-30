@@ -1,10 +1,11 @@
 import { gray, red } from "ansi-colors";
 import { dest, src, watch } from "gulp";
 import esbuild from "gulp-esbuild";
-import ts from "gulp-typescript";
+import type { reporter } from "gulp-typescript";
+import { createProject } from "gulp-typescript";
 import del from "del";
 
-function goodReporter(): ts.reporter.Reporter {
+export function goodReporter(): reporter.Reporter {
   return {
     error: (error, typescript) => {
       if (error.tsFile) {
@@ -27,7 +28,7 @@ function goodReporter(): ts.reporter.Reporter {
   };
 }
 
-const tsProject = ts.createProject("tsconfig.json");
+const tsProject = createProject("tsconfig.json");
 
 export function cleanOutput() {
   return tsProject.projectDirectory
@@ -56,7 +57,7 @@ export function compileEsbuild() {
 }
 
 export function watchEsbuild() {
-  watch("src/**/*.ts", compileEsbuild);
+  watch(["src/**/*.ts", "!src/view/**/*.ts"], compileEsbuild);
 }
 
 export function checkTypeScript() {
@@ -66,7 +67,7 @@ export function checkTypeScript() {
 }
 
 export function watchCheckTypeScript() {
-  watch("src/**/*.ts", checkTypeScript);
+  watch(["src/**/*.ts", "!src/view/**/*.ts"], checkTypeScript);
 }
 
 export function copyWasmFiles() {
@@ -76,5 +77,8 @@ export function copyWasmFiles() {
   // to configure the path to the WASM file. So, source-map will always load the file from `__dirname/mappings.wasm`.
   // In version 0.8.0, it may be possible to do this properly by calling SourceMapConsumer.initialize by
   // using the "browser" field in source-map's package.json to load the WASM file from a given file path.
-  return src("node_modules/source-map/lib/mappings.wasm").pipe(dest("out"));
+  return src("node_modules/source-map/lib/mappings.wasm", {
+    // WASM is a binary format, so don't try to re-encode it as text.
+    encoding: false,
+  }).pipe(dest("out"));
 }

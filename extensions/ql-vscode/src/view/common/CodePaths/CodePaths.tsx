@@ -1,21 +1,28 @@
-import * as React from "react";
-import { useRef, useState } from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react";
 
-import { Overlay, ThemeProvider } from "@primer/react";
-
-import {
+import type {
   AnalysisMessage,
   CodeFlow,
   ResultSeverity,
 } from "../../../variant-analysis/shared/analysis-result";
-import { CodePathsOverlay } from "./CodePathsOverlay";
-import { useTelemetryOnChange } from "../telemetry";
+import { vscode } from "../../vscode-api";
 
 const ShowPathsLink = styled(VSCodeLink)`
   cursor: pointer;
 `;
+
+const Label = styled.span`
+  color: var(--vscode-descriptionForeground);
+  margin-left: 10px;
+`;
+
+function getShortestPathLength(codeFlows: CodeFlow[]): number {
+  const allPathLengths = codeFlows
+    .map((codeFlow) => codeFlow.threadFlows.length)
+    .flat();
+  return Math.min(...allPathLengths);
+}
 
 export type CodePathsProps = {
   codeFlows: CodeFlow[];
@@ -24,46 +31,28 @@ export type CodePathsProps = {
   severity: ResultSeverity;
 };
 
-const filterIsOpenTelemetry = (v: boolean) => v;
-
 export const CodePaths = ({
   codeFlows,
   ruleDescription,
   message,
   severity,
 }: CodePathsProps) => {
-  const [isOpen, setIsOpen] = useState(false);
-  useTelemetryOnChange(isOpen, "code-path-is-open", {
-    filterTelemetryOnValue: filterIsOpenTelemetry,
-  });
-
-  const linkRef = useRef<HTMLAnchorElement>(null);
-
-  const closeOverlay = () => setIsOpen(false);
+  const onShowPathsClick = () => {
+    vscode.postMessage({
+      t: "showDataFlowPaths",
+      dataFlowPaths: {
+        codeFlows,
+        ruleDescription,
+        message,
+        severity,
+      },
+    });
+  };
 
   return (
     <>
-      <ShowPathsLink onClick={() => setIsOpen(true)} ref={linkRef}>
-        Show paths
-      </ShowPathsLink>
-      {isOpen && (
-        <ThemeProvider colorMode="auto">
-          <Overlay
-            returnFocusRef={linkRef}
-            onEscape={closeOverlay}
-            onClickOutside={closeOverlay}
-            anchorSide="outside-top"
-          >
-            <CodePathsOverlay
-              codeFlows={codeFlows}
-              ruleDescription={ruleDescription}
-              message={message}
-              severity={severity}
-              onClose={closeOverlay}
-            />
-          </Overlay>
-        </ThemeProvider>
-      )}
+      <ShowPathsLink onClick={onShowPathsClick}>Show paths</ShowPathsLink>
+      <Label>(Shortest: {getShortestPathLength(codeFlows)})</Label>
     </>
   );
 };

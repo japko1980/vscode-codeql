@@ -1,39 +1,38 @@
-import * as messages from "./pure/messages-shared";
-import * as legacyMessages from "./pure/legacy-messages";
-import { DatabaseInfo, QueryMetadata } from "./pure/interface-types";
+import type { Position } from "./query-server/messages-shared";
+import type { DatabaseInfo, QueryMetadata } from "./common/interface-types";
 import { join, parse, dirname, basename } from "path";
-import { createTimestampFile, showAndLogWarningMessage } from "./helpers";
-import {
-  ConfigurationTarget,
-  Range,
-  TextDocument,
-  TextEditor,
-  Uri,
-  window,
-} from "vscode";
-import { isCanary, AUTOSAVE_SETTING } from "./config";
-import { UserCancellationException } from "./commandRunner";
+import type { Range, TextEditor } from "vscode";
+import { Uri, window, workspace } from "vscode";
+import { isCanary, VSCODE_SAVE_BEFORE_START_SETTING } from "./config";
 import {
   pathExists,
   readFile,
   createWriteStream,
   remove,
   readdir,
+  ensureDir,
+  writeFile,
 } from "fs-extra";
-import {
-  ensureMetadataIsComplete,
-  InitialQueryInfo,
-  LocalQueryInfo,
-} from "./query-results";
-import { isQuickQueryPath } from "./quick-query";
+import type { InitialQueryInfo } from "./query-results";
+import { ensureMetadataIsComplete } from "./query-results";
+import { isQuickQueryPath } from "./local-queries/quick-query";
 import { nanoid } from "nanoid";
-import { CodeQLCliServer } from "./cli";
-import { SELECT_QUERY_NAME } from "./contextual/locationFinder";
-import { DatabaseManager } from "./local-databases";
-import { DecodedBqrsChunk } from "./pure/bqrs-cli-types";
-import { extLogger, Logger } from "./common";
+import type { CodeQLCliServer } from "./codeql-cli/cli";
+import { SELECT_QUERY_NAME } from "./language-support";
+import type { DatabaseManager } from "./databases/local-databases";
+import type {
+  DecodedBqrsChunk,
+  BqrsEntityValue,
+} from "./common/bqrs-cli-types";
+import type { BaseLogger } from "./common/logging";
+import { showAndLogWarningMessage } from "./common/logging";
+import { extLogger } from "./common/logging/vscode";
 import { generateSummarySymbolsFile } from "./log-insights/summary-parser";
-import { getErrorMessage } from "./pure/helpers-pure";
+import { getErrorMessage } from "./common/helpers-pure";
+import { createHash } from "crypto";
+import { QueryOutputDir } from "./local-queries/query-output-dir";
+import { progressUpdate } from "./common/vscode/progress";
+import type { ProgressCallback } from "./common/vscode/progress";
 
 /**
  * run-queries.ts
@@ -42,87 +41,41 @@ import { getErrorMessage } from "./pure/helpers-pure";
  * Compiling and running QL queries.
  */
 
-export function findQueryLogFile(resultPath: string): string {
-  return join(resultPath, "query.log");
+/**
+ * Holds the paths to the various structured log summary files generated for a query evaluation.
+ */
+export interface EvaluatorLogPaths {
+  log: string;
+  humanReadableSummary: string | undefined;
+  endSummary: string | undefined;
+  jsonSummary: string | undefined;
+  summarySymbols: string | undefined;
 }
 
-function findQueryEvalLogFile(resultPath: string): string {
-  return join(resultPath, "evaluator-log.jsonl");
-}
+export class QueryEvaluationInfo extends QueryOutputDir {
+  // We extend `QueryOutputDir`, rather than having it as a property, because we need
+  // `QueryOutputDir`'s `querySaveDir` property to be a property of `QueryEvaluationInfo`. This is
+  // because `QueryEvaluationInfo` is serialized directly as JSON, and before we hoisted
+  // `QueryOutputDir` out into a base class, `querySaveDir` was a property on `QueryEvaluationInfo`
+  // itself.
 
-function findQueryEvalLogSummaryFile(resultPath: string): string {
-  return join(resultPath, "evaluator-log.summary");
-}
-
-function findJsonQueryEvalLogSummaryFile(resultPath: string): string {
-  return join(resultPath, "evaluator-log.summary.jsonl");
-}
-
-function findQueryEvalLogSummarySymbolsFile(resultPath: string): string {
-  return join(resultPath, "evaluator-log.summary.symbols.json");
-}
-
-function findQueryEvalLogEndSummaryFile(resultPath: string): string {
-  return join(resultPath, "evaluator-log-end.summary");
-}
-
-export class QueryEvaluationInfo {
   /**
-   * Note that in the {@link deserializeQueryHistory} method, we create a QueryEvaluationInfo instance
+   * Note that in the {@link readQueryHistoryFromFile} method, we create a QueryEvaluationInfo instance
    * by explicitly setting the prototype in order to avoid calling this constructor.
    */
   constructor(
-    public readonly querySaveDir: string,
+    querySaveDir: string,
     public readonly dbItemPath: string,
-    private readonly databaseHasMetadataFile: boolean,
-    public readonly quickEvalPosition?: messages.Position,
+    public readonly databaseHasMetadataFile: boolean,
+    public readonly quickEvalPosition?: Position,
     public readonly metadata?: QueryMetadata,
   ) {
-    /**/
-  }
-
-  get dilPath() {
-    return join(this.querySaveDir, "results.dil");
-  }
-
-  /**
-   * Get the path that the compiled query is if it exists. Note that it only exists when using the legacy query server.
-   */
-  get compileQueryPath() {
-    return join(this.querySaveDir, "compiledQuery.qlo");
-  }
-
-  get csvPath() {
-    return join(this.querySaveDir, "results.csv");
-  }
-
-  get logPath() {
-    return findQueryLogFile(this.querySaveDir);
-  }
-
-  get evalLogPath() {
-    return findQueryEvalLogFile(this.querySaveDir);
-  }
-
-  get evalLogSummaryPath() {
-    return findQueryEvalLogSummaryFile(this.querySaveDir);
-  }
-
-  get jsonEvalLogSummaryPath() {
-    return findJsonQueryEvalLogSummaryFile(this.querySaveDir);
-  }
-
-  get evalLogSummarySymbolsPath() {
-    return findQueryEvalLogSummarySymbolsFile(this.querySaveDir);
-  }
-
-  get evalLogEndSummaryPath() {
-    return findQueryEvalLogEndSummaryFile(this.querySaveDir);
+    super(querySaveDir);
   }
 
   get resultsPaths() {
     return {
-      resultsPath: join(this.querySaveDir, "results.bqrs"),
+      resultsPath: this.bqrsPath,
       interpretedResultsPath: join(
         this.querySaveDir,
         this.metadata?.kind === "graph"
@@ -132,15 +85,12 @@ export class QueryEvaluationInfo {
     };
   }
   getSortedResultSetPath(resultSetName: string) {
-    return join(this.querySaveDir, `sortedResults-${resultSetName}.bqrs`);
-  }
-
-  /**
-   * Creates a file in the query directory that indicates when this query was created.
-   * This is important for keeping track of when queries should be removed.
-   */
-  async createTimestampFile() {
-    await createTimestampFile(this.querySaveDir);
+    const hasher = createHash("sha256");
+    hasher.update(resultSetName);
+    return join(
+      this.querySaveDir,
+      `sortedResults-${hasher.digest("hex")}.bqrs`,
+    );
   }
 
   /**
@@ -204,17 +154,10 @@ export class QueryEvaluationInfo {
     }
     const compiledQuery = this.compileQueryPath;
     if (!(await pathExists(compiledQuery))) {
-      if (await cliServer.cliConstraints.supportsNewQueryServer()) {
-        // This could be from the new query server
-        // in which case we expect the qlo to be missing so we should ignore it
-        throw new Error(
-          `DIL was not found. Expected location: '${this.dilPath}'`,
-        );
-      } else {
-        throw new Error(
-          `Cannot create DIL because compiled query is missing. ${compiledQuery}`,
-        );
-      }
+      // We expect the qlo to be missing so we should ignore it
+      throw new Error(
+        `DIL was not found. Expected location: '${this.dilPath}'`,
+      );
     }
 
     await cliServer.generateDil(compiledQuery, this.dilPath);
@@ -226,89 +169,6 @@ export class QueryEvaluationInfo {
    */
   async hasEvalLog(): Promise<boolean> {
     return pathExists(this.evalLogPath);
-  }
-
-  /**
-   * Add the structured evaluator log to the query evaluation info.
-   */
-  async addQueryLogs(
-    queryInfo: LocalQueryInfo,
-    cliServer: CodeQLCliServer,
-    logger: Logger,
-  ) {
-    queryInfo.evalLogLocation = this.evalLogPath;
-    queryInfo.evalLogSummaryLocation =
-      await this.generateHumanReadableLogSummary(cliServer);
-    void this.logEndSummary(queryInfo.evalLogSummaryLocation, logger); // Logged asynchrnously
-    if (isCanary()) {
-      // Generate JSON summary for viewer.
-      await cliServer.generateJsonLogSummary(
-        this.evalLogPath,
-        this.jsonEvalLogSummaryPath,
-      );
-      queryInfo.jsonEvalLogSummaryLocation = this.jsonEvalLogSummaryPath;
-      await generateSummarySymbolsFile(
-        this.evalLogSummaryPath,
-        this.evalLogSummarySymbolsPath,
-      );
-      queryInfo.evalLogSummarySymbolsLocation = this.evalLogSummarySymbolsPath;
-    }
-  }
-
-  /**
-   * Calls the appropriate CLI command to generate a human-readable log summary.
-   * @param qs The query server client.
-   * @returns The path to the log summary, or `undefined` if the summary could not be generated.   */
-  private async generateHumanReadableLogSummary(
-    cliServer: CodeQLCliServer,
-  ): Promise<string | undefined> {
-    try {
-      await cliServer.generateLogSummary(
-        this.evalLogPath,
-        this.evalLogSummaryPath,
-        this.evalLogEndSummaryPath,
-      );
-      return this.evalLogSummaryPath;
-    } catch (e) {
-      void showAndLogWarningMessage(
-        `Failed to generate human-readable structured evaluator log summary. Reason: ${getErrorMessage(
-          e,
-        )}`,
-      );
-      return undefined;
-    }
-  }
-
-  /**
-   * Logs the end summary to the Output window and log file.
-   * @param logSummaryPath Path to the human-readable log summary
-   * @param qs The query server client.
-   */
-  private async logEndSummary(
-    logSummaryPath: string | undefined,
-    logger: Logger,
-  ): Promise<void> {
-    if (logSummaryPath === undefined) {
-      // Failed to generate the log, so we don't expect an end summary either.
-      return;
-    }
-
-    try {
-      const endSummaryContent = await readFile(
-        this.evalLogEndSummaryPath,
-        "utf-8",
-      );
-      void logger.log(" --- Evaluator Log Summary --- ", {
-        additionalLogLocation: this.logPath,
-      });
-      void logger.log(endSummaryContent, {
-        additionalLogLocation: this.logPath,
-      });
-    } catch (e) {
-      void showAndLogWarningMessage(
-        `Could not read structured evaluator log end of summary file at ${this.evalLogEndSummaryPath}.`,
-      );
-    }
   }
 
   /**
@@ -326,7 +186,7 @@ export class QueryEvaluationInfo {
   ): Promise<boolean> {
     const resultSet = await this.chooseResultSet(cliServer);
     if (!resultSet) {
-      void showAndLogWarningMessage("Query has no result set.");
+      void showAndLogWarningMessage(extLogger, "Query has no result set.");
       return false;
     }
     let stopDecoding = false;
@@ -355,11 +215,17 @@ export class QueryEvaluationInfo {
       chunk.tuples.forEach((tuple) => {
         out.write(
           `${tuple
-            .map((v, i) =>
-              chunk.columns[i].kind === "String"
-                ? `"${typeof v === "string" ? v.replaceAll('"', '""') : v}"`
-                : v,
-            )
+            .map((v, i) => {
+              if (chunk.columns[i].kind === "String") {
+                return `"${
+                  typeof v === "string" ? v.replaceAll('"', '""') : v
+                }"`;
+              } else if (chunk.columns[i].kind === "Entity") {
+                return (v as BqrsEntityValue).label;
+              } else {
+                return v;
+              }
+            })
             .join(",")}\n`,
         );
       });
@@ -378,7 +244,7 @@ export class QueryEvaluationInfo {
    */
   async chooseResultSet(cliServer: CodeQLCliServer) {
     const resultSets = (
-      await cliServer.bqrsInfo(this.resultsPaths.resultsPath, 0)
+      await cliServer.bqrsInfo(this.resultsPaths.resultsPath)
     )["result-sets"];
     if (!resultSets.length) {
       return undefined;
@@ -436,62 +302,38 @@ export class QueryEvaluationInfo {
 export interface QueryWithResults {
   readonly query: QueryEvaluationInfo;
   readonly logFileLocation?: string;
-  readonly dispose: () => void;
-  readonly successful?: boolean;
-  readonly message?: string;
-  readonly result: legacyMessages.EvaluationResult;
+  readonly successful: boolean;
+  readonly message: string;
 }
 
 /**
- * Information about which query will be to be run. `quickEvalPosition` and `quickEvalText`
- * is only filled in if the query is a quick query.
+ * Validates that the specified URI represents a QL query, and returns the file system path to that
+ * query.
+ *
+ * If `allowLibraryFiles` is set, ".qll" files will also be allowed as query files.
  */
-interface SelectedQuery {
-  queryPath: string;
-  quickEvalPosition?: messages.Position;
-  quickEvalText?: string;
-}
-
-/**
- * Determines which QL file to run during an invocation of `Run Query` or `Quick Evaluation`, as follows:
- * - If the command was called by clicking on a file, then use that file.
- * - Otherwise, use the file open in the current editor.
- * - In either case, prompt the user to save the file if it is open with unsaved changes.
- * - For `Quick Evaluation`, ensure the selected file is also the one open in the editor,
- * and use the selected region.
- * @param selectedResourceUri The selected resource when the command was run.
- * @param quickEval Whether the command being run is `Quick Evaluation`.
- */
-export async function determineSelectedQuery(
-  selectedResourceUri: Uri | undefined,
-  quickEval: boolean,
-  range?: Range,
-): Promise<SelectedQuery> {
-  const editor = window.activeTextEditor;
-
-  // Choose which QL file to use.
-  let queryUri: Uri;
-  if (selectedResourceUri) {
-    // A resource was passed to the command handler, so use it.
-    queryUri = selectedResourceUri;
-  } else {
-    // No resource was passed to the command handler, so obtain it from the active editor.
-    // This usually happens when the command is called from the Command Palette.
-    if (editor === undefined) {
-      throw new Error(
-        "No query was selected. Please select a query and try again.",
-      );
-    } else {
-      queryUri = editor.document.uri;
-    }
-  }
-
+export function validateQueryUri(
+  queryUri: Uri,
+  allowLibraryFiles: boolean,
+): string {
   if (queryUri.scheme !== "file") {
     throw new Error("Can only run queries that are on disk.");
   }
   const queryPath = queryUri.fsPath;
+  validateQueryPath(queryPath, allowLibraryFiles);
+  return queryPath;
+}
 
-  if (quickEval) {
+/**
+ * Validates that the specified path represents a QL query
+ *
+ * If `allowLibraryFiles` is set, ".qll" files will also be allowed as query files.
+ */
+export function validateQueryPath(
+  queryPath: string,
+  allowLibraryFiles: boolean,
+): void {
+  if (allowLibraryFiles) {
     if (!(queryPath.endsWith(".ql") || queryPath.endsWith(".qll"))) {
       throw new Error(
         'The selected resource is not a CodeQL file; It should have the extension ".ql" or ".qll".',
@@ -504,47 +346,62 @@ export async function determineSelectedQuery(
       );
     }
   }
+}
 
-  // Whether we chose the file from the active editor or from a context menu,
-  // if the same file is open with unsaved changes in the active editor,
-  // then prompt the user to save it first.
-  if (editor !== undefined && editor.document.uri.fsPath === queryPath) {
-    if (await promptUserToSaveChanges(editor.document)) {
-      await editor.document.save();
-    }
+export interface QuickEvalContext {
+  quickEvalPosition: Position;
+  quickEvalText: string;
+  quickEvalCount: boolean;
+}
+
+/**
+ * Gets the selection to be used for quick evaluation.
+ *
+ * If `range` is specified, then that range will be used. Otherwise, the current selection will be
+ * used.
+ */
+export async function getQuickEvalContext(
+  range: Range | undefined,
+  isCountOnly: boolean,
+): Promise<QuickEvalContext> {
+  const editor = window.activeTextEditor;
+  if (editor === undefined) {
+    throw new Error("Can't run quick evaluation without an active editor.");
+  }
+  // For Quick Evaluation, the selected position comes from the active editor, but it's possible
+  // that query itself was a different file. We need to validate the path of the file we're using
+  // for the QuickEval selection in case it was different.
+  validateQueryUri(editor.document.uri, true);
+  const quickEvalPosition = await getSelectedPosition(editor, range);
+  let quickEvalText: string;
+  if (!editor.selection?.isEmpty) {
+    quickEvalText = editor.document.getText(editor.selection).trim();
+  } else {
+    // capture the entire line if the user didn't select anything
+    const line = editor.document.lineAt(editor.selection.active.line);
+    quickEvalText = line.text.trim();
   }
 
-  let quickEvalPosition: messages.Position | undefined = undefined;
-  let quickEvalText: string | undefined = undefined;
-  if (quickEval) {
-    if (editor === undefined) {
-      throw new Error("Can't run quick evaluation without an active editor.");
-    }
-    if (editor.document.fileName !== queryPath) {
-      // For Quick Evaluation we expect these to be the same.
-      // Report an error if we end up in this (hopefully unlikely) situation.
-      throw new Error(
-        "The selected resource for quick evaluation should match the active editor.",
-      );
-    }
-    quickEvalPosition = await getSelectedPosition(editor, range);
-    if (!editor.selection?.isEmpty) {
-      quickEvalText = editor.document.getText(editor.selection);
-    } else {
-      // capture the entire line if the user didn't select anything
-      const line = editor.document.lineAt(editor.selection.active.line);
-      quickEvalText = line.text.trim();
-    }
-  }
+  return {
+    quickEvalPosition,
+    quickEvalText,
+    quickEvalCount: isCountOnly,
+  };
+}
 
-  return { queryPath, quickEvalPosition, quickEvalText };
+/**
+ * Information about which query will be to be run, optionally including a QuickEval selection.
+ */
+export interface SelectedQuery {
+  queryPath: string;
+  quickEval?: QuickEvalContext;
 }
 
 /** Gets the selected position within the given editor. */
 async function getSelectedPosition(
   editor: TextEditor,
   range?: Range,
-): Promise<messages.Position> {
+): Promise<Position> {
   const selectedRange = range || editor.selection;
   const pos = selectedRange.start;
   const posEnd = selectedRange.end;
@@ -558,53 +415,41 @@ async function getSelectedPosition(
   };
 }
 
+type SaveBeforeStartMode =
+  | "nonUntitledEditorsInActiveGroup"
+  | "allEditorsInActiveGroup"
+  | "none";
+
 /**
- * Prompts the user to save `document` if it has unsaved changes.
- *
- * @param document The document to save.
- *
- * @returns true if we should save changes and false if we should continue without saving changes.
- * @throws UserCancellationException if we should abort whatever operation triggered this prompt
+ * Saves dirty files before running queries, based on the user's settings.
  */
-async function promptUserToSaveChanges(
-  document: TextDocument,
-): Promise<boolean> {
-  if (document.isDirty) {
-    if (AUTOSAVE_SETTING.getValue()) {
-      return true;
-    } else {
-      const yesItem = { title: "Yes", isCloseAffordance: false };
-      const alwaysItem = { title: "Always Save", isCloseAffordance: false };
-      const noItem = {
-        title: "No (run version on disk)",
-        isCloseAffordance: false,
-      };
-      const cancelItem = { title: "Cancel", isCloseAffordance: true };
-      const message = "Query file has unsaved changes. Save now?";
-      const chosenItem = await window.showInformationMessage(
-        message,
-        { modal: true },
-        yesItem,
-        alwaysItem,
-        noItem,
-        cancelItem,
-      );
+export async function saveBeforeStart(): Promise<void> {
+  const mode: SaveBeforeStartMode =
+    (VSCODE_SAVE_BEFORE_START_SETTING.getValue<string>({
+      languageId: "ql",
+    }) as SaveBeforeStartMode) ?? "nonUntitledEditorsInActiveGroup";
 
-      if (chosenItem === alwaysItem) {
-        await AUTOSAVE_SETTING.updateValue(true, ConfigurationTarget.Workspace);
-        return true;
-      }
+  // Despite the names of the modes, the VS Code implementation doesn't restrict itself to the
+  // current tab group. It saves all dirty files in all groups. We'll do the same.
+  switch (mode) {
+    case "nonUntitledEditorsInActiveGroup":
+      await workspace.saveAll(false);
+      break;
 
-      if (chosenItem === yesItem) {
-        return true;
-      }
+    case "allEditorsInActiveGroup":
+      // The VS Code implementation of this mode only saves an untitled file if it is the document
+      // in the active editor. That's too much work for us, so we'll just live with the inconsistency.
+      await workspace.saveAll(true);
+      break;
 
-      if (chosenItem === cancelItem) {
-        throw new UserCancellationException("Query run cancelled.", true);
-      }
-    }
+    case "none":
+      break;
+
+    default:
+      // Unexpected value. Fall back to the default behavior.
+      await workspace.saveAll(false);
+      break;
   }
-  return false;
 }
 
 /**
@@ -631,7 +476,7 @@ async function convertToQlPath(filePath: string): Promise<string> {
         }
       }
     }
-    throw new Error(`Can't convert path to form suitable for QL:${filePath}`);
+    throw new Error(`Can't convert path to form suitable for QL: ${filePath}`);
   } else {
     return filePath;
   }
@@ -641,36 +486,144 @@ async function convertToQlPath(filePath: string): Promise<string> {
  * Determines the initial information for a query. This is everything of interest
  * we know about this query that is available before it is run.
  *
- * @param selectedQueryUri The Uri of the document containing the query to be run.
+ * @param selectedQuery The query to run, including any quickeval info.
  * @param databaseInfo The database to run the query against.
- * @param isQuickEval true if this is a quick evaluation.
- * @param range the selection range of the query to be run. Only used if isQuickEval is true.
+ * @param outputDir The output directory for this query.
  * @returns The initial information for the query to be run.
  */
 export async function createInitialQueryInfo(
-  selectedQueryUri: Uri | undefined,
+  selectedQuery: SelectedQuery,
   databaseInfo: DatabaseInfo,
-  isQuickEval: boolean,
-  range?: Range,
+  outputDir: QueryOutputDir,
 ): Promise<InitialQueryInfo> {
-  // Determine which query to run, based on the selection and the active editor.
-  const { queryPath, quickEvalPosition, quickEvalText } =
-    await determineSelectedQuery(selectedQueryUri, isQuickEval, range);
-
+  const isQuickEval = selectedQuery.quickEval !== undefined;
+  const isQuickEvalCount = selectedQuery.quickEval?.quickEvalCount;
   return {
-    queryPath,
+    queryPath: selectedQuery.queryPath,
     isQuickEval,
-    isQuickQuery: isQuickQueryPath(queryPath),
+    isQuickEvalCount,
+    isQuickQuery: isQuickQueryPath(selectedQuery.queryPath),
     databaseInfo,
-    id: `${basename(queryPath)}-${nanoid()}`,
+    id: `${basename(selectedQuery.queryPath)}-${nanoid()}`,
     start: new Date(),
-    ...(isQuickEval
+    ...(selectedQuery.quickEval !== undefined
       ? {
-          queryText: quickEvalText!, // if this query is quick eval, it must have quick eval text
-          quickEvalPosition,
+          queryText: selectedQuery.quickEval.quickEvalText,
+          quickEvalPosition: selectedQuery.quickEval.quickEvalPosition,
         }
       : {
-          queryText: await readFile(queryPath, "utf8"),
+          queryText: await readFile(selectedQuery.queryPath, "utf8"),
         }),
+    outputDir,
   };
+}
+
+export async function generateEvalLogSummaries(
+  cliServer: CodeQLCliServer,
+  outputDir: QueryOutputDir,
+  progress: ProgressCallback,
+): Promise<EvaluatorLogPaths | undefined> {
+  const log = outputDir.evalLogPath;
+  if (!(await pathExists(log))) {
+    // No raw JSON log, so we can't generate any summaries.
+    return undefined;
+  }
+  let humanReadableSummary: string | undefined = undefined;
+  let endSummary: string | undefined = undefined;
+  progress(progressUpdate(1, 3, "Generating evaluator log summary"));
+  if (await generateHumanReadableLogSummary(cliServer, outputDir)) {
+    humanReadableSummary = outputDir.evalLogSummaryPath;
+    endSummary = outputDir.evalLogEndSummaryPath;
+  }
+  let jsonSummary: string | undefined = undefined;
+  let summarySymbols: string | undefined = undefined;
+  if (isCanary()) {
+    // Generate JSON summary for viewer.
+    progress(progressUpdate(2, 3, "Generating JSON log summary"));
+    jsonSummary = outputDir.jsonEvalLogSummaryPath;
+    await cliServer.generateJsonLogSummary(log, jsonSummary);
+
+    if (humanReadableSummary !== undefined) {
+      summarySymbols = outputDir.evalLogSummarySymbolsPath;
+      if (
+        !(await cliServer.cliConstraints.supportsGenerateSummarySymbolMap())
+      ) {
+        // We're using an old CLI that cannot generate the summary symbols file while generating the
+        // human-readable log summary. As a fallback, create it by parsing the human-readable
+        // summary.
+        progress(progressUpdate(3, 3, "Generating summary symbols file"));
+        await generateSummarySymbolsFile(humanReadableSummary, summarySymbols);
+      }
+    }
+  }
+
+  return {
+    log,
+    humanReadableSummary,
+    endSummary,
+    jsonSummary,
+    summarySymbols,
+  };
+}
+
+/**
+ * Calls the appropriate CLI command to generate a human-readable log summary.
+ * @param cliServer The cli server client.
+ * @param outputDir The query's output directory, where all of the logs are located.
+ * @returns True if the summary and end summary were generated, or false if not.
+ */
+async function generateHumanReadableLogSummary(
+  cliServer: CodeQLCliServer,
+  outputDir: QueryOutputDir,
+): Promise<boolean> {
+  try {
+    await cliServer.generateLogSummary(
+      outputDir.evalLogPath,
+      outputDir.evalLogSummaryPath,
+      outputDir.evalLogEndSummaryPath,
+    );
+    return true;
+  } catch (e) {
+    void showAndLogWarningMessage(
+      extLogger,
+      `Failed to generate human-readable structured evaluator log summary. Reason: ${getErrorMessage(
+        e,
+      )}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Logs the end summary to the Output window and log file.
+ * @param logSummaryPath Path to the human-readable log summary
+ * @param qs The query server client.
+ */
+export async function logEndSummary(
+  endSummary: string,
+  logger: BaseLogger,
+): Promise<void> {
+  try {
+    const endSummaryContent = await readFile(endSummary, "utf-8");
+    void logger.log(" --- Evaluator Log Summary --- ");
+    void logger.log(endSummaryContent);
+  } catch {
+    void showAndLogWarningMessage(
+      extLogger,
+      `Could not read structured evaluator log end of summary file at ${endSummary}.`,
+    );
+  }
+}
+
+/**
+ * Creates a file in the query directory that indicates when this query was created.
+ * This is important for keeping track of when queries should be removed.
+ *
+ * @param storagePath The directory that will contain all files relevant to a query result.
+ * It does not need to exist.
+ */
+export async function createTimestampFile(storagePath: string) {
+  const timestampPath = join(storagePath, "timestamp");
+  await ensureDir(storagePath);
+  await writeFile(timestampPath, Date.now().toString(), "utf8");
 }

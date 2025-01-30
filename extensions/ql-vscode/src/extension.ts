@@ -1,136 +1,141 @@
 import "source-map-support/register";
+import type { CancellationToken, Disposable, ExtensionContext } from "vscode";
 import {
-  CancellationToken,
-  CancellationTokenSource,
-  commands,
-  Disposable,
   env,
-  ExtensionContext,
   extensions,
   languages,
   ProgressLocation,
-  ProgressOptions,
-  QuickPickItem,
-  Range,
   Uri,
   version as vscodeVersion,
   window as Window,
-  window,
   workspace,
 } from "vscode";
-import { LanguageClient } from "vscode-languageclient/node";
-import { arch, platform } from "os";
+import type { LanguageClient } from "vscode-languageclient/node";
+import { arch, homedir, platform } from "os";
 import { ensureDir } from "fs-extra";
-import { basename, join } from "path";
+import { join } from "path";
 import { dirSync } from "tmp-promise";
-import { testExplorerExtensionId, TestHub } from "vscode-test-adapter-api";
 import { lt, parse } from "semver";
-
-import { AstViewer } from "./astViewer";
+import { watch } from "chokidar";
 import {
   activate as archiveFilesystemProvider_activate,
   zipArchiveScheme,
-} from "./archive-filesystem-provider";
-import QuickEvalCodeLensProvider from "./quickEvalCodeLensProvider";
-import { CodeQLCliServer } from "./cli";
+} from "./common/vscode/archive-filesystem-provider";
+import { CliVersionConstraint, CodeQLCliServer } from "./codeql-cli/cli";
 import {
+  ADD_DATABASE_SOURCE_TO_WORKSPACE_SETTING,
+  addDatabaseSourceToWorkspace,
   CliConfigListener,
   DistributionConfigListener,
-  isCanary,
+  GitHubDatabaseConfigListener,
   joinOrderWarningThreshold,
-  MAX_QUERIES,
   QueryHistoryConfigListener,
   QueryServerConfigListener,
+  VariantAnalysisConfigListener,
 } from "./config";
-import { install } from "./languageSupport";
-import { DatabaseItem, DatabaseManager } from "./local-databases";
-import { DatabaseUI } from "./local-databases-ui";
 import {
+  AstViewer,
+  createLanguageClient,
+  getQueryEditorCommands,
+  install,
   TemplatePrintAstProvider,
   TemplatePrintCfgProvider,
   TemplateQueryDefinitionProvider,
   TemplateQueryReferenceProvider,
-} from "./contextual/templateProvider";
+} from "./language-support";
+import { DatabaseManager } from "./databases/local-databases";
+import { DatabaseUI } from "./databases/local-databases-ui";
+import type { FindDistributionResult } from "./codeql-cli/distribution";
 import {
   DEFAULT_DISTRIBUTION_VERSION_RANGE,
   DistributionKind,
   DistributionManager,
   DistributionUpdateCheckResultKind,
-  FindDistributionResult,
   FindDistributionResultKind,
+} from "./codeql-cli/distribution";
+import {
   GithubApiError,
   GithubRateLimitedError,
-} from "./distribution";
+} from "./codeql-cli/distribution/github-api-error";
+import { tmpDir, tmpDirDisposal } from "./tmp-dir";
+import { prepareCodeTour } from "./code-tour/code-tour";
 import {
-  findLanguage,
+  showBinaryChoiceDialog,
+  showInformationMessageWithAction,
+} from "./common/vscode/dialog";
+import {
+  asError,
+  assertNever,
+  getErrorMessage,
+  getErrorStack,
+} from "./common/helpers-pure";
+import {
+  LocalQueries,
+  QuickEvalCodeLensProvider,
+  ResultsView,
+  WebviewReveal,
+} from "./local-queries";
+import type { BaseLogger } from "./common/logging";
+import {
   showAndLogErrorMessage,
   showAndLogExceptionWithTelemetry,
   showAndLogInformationMessage,
   showAndLogWarningMessage,
-  showBinaryChoiceDialog,
-  showInformationMessageWithAction,
-  tmpDir,
-  tmpDirDisposal,
-} from "./helpers";
-import { asError, assertNever, getErrorMessage } from "./pure/helpers-pure";
-import { spawnIdeServer } from "./ide-server";
-import { ResultsView } from "./interface";
-import { WebviewReveal } from "./interface-utils";
+} from "./common/logging";
+import type { ProgressReporter } from "./common/logging/vscode";
 import {
   extLogger,
-  ideServerLogger,
-  ProgressReporter,
+  languageServerLogger,
   queryServerLogger,
-} from "./common";
+} from "./common/logging/vscode";
 import { QueryHistoryManager } from "./query-history/query-history-manager";
-import { CompletedLocalQueryInfo, LocalQueryInfo } from "./query-results";
-import { QueryServerClient as LegacyQueryServerClient } from "./legacy-query-server/queryserver-client";
-import { QueryServerClient } from "./query-server/queryserver-client";
-import { displayQuickQuery } from "./quick-query";
-import { QLTestAdapterFactory } from "./test-adapter";
-import { TestUIService } from "./test-ui";
+import type { CompletedLocalQueryInfo } from "./query-results";
 import { CompareView } from "./compare/compare-view";
-import { gatherQlFiles } from "./pure/files";
-import { initializeTelemetry } from "./telemetry";
 import {
-  commandRunner,
-  commandRunnerWithProgress,
-  ProgressCallback,
-  ProgressUpdate,
-  withProgress,
-} from "./commandRunner";
+  initializeTelemetry,
+  telemetryListener,
+} from "./common/vscode/telemetry";
+import type { ProgressCallback } from "./common/vscode/progress";
+import { withProgress } from "./common/vscode/progress";
 import { CodeQlStatusBarHandler } from "./status-bar";
-import {
-  handleDownloadPacks,
-  handleInstallPackDependencies,
-} from "./packaging";
+import { getPackagingCommands } from "./packaging";
 import { HistoryItemLabelProvider } from "./query-history/history-item-label-provider";
-import {
-  exportSelectedVariantAnalysisResults,
-  exportVariantAnalysisResults,
-} from "./variant-analysis/export-results";
-import { EvalLogViewer } from "./eval-log-viewer";
+import { EvalLogViewer } from "./query-evaluation-logging";
 import { SummaryLanguageSupport } from "./log-insights/summary-language-support";
 import { JoinOrderScannerProvider } from "./log-insights/join-order";
 import { LogScannerService } from "./log-insights/log-scanner-service";
-import { createInitialQueryInfo } from "./run-queries-shared";
-import { LegacyQueryRunner } from "./legacy-query-server/legacyRunner";
-import { NewQueryRunner } from "./query-server/query-runner";
-import { QueryRunner } from "./queryRunner";
 import { VariantAnalysisView } from "./variant-analysis/variant-analysis-view";
 import { VariantAnalysisViewSerializer } from "./variant-analysis/variant-analysis-view-serializer";
-import {
-  VariantAnalysis,
-  VariantAnalysisScannedRepository,
-} from "./variant-analysis/shared/variant-analysis";
 import { VariantAnalysisManager } from "./variant-analysis/variant-analysis-manager";
 import { createVariantAnalysisContentProvider } from "./variant-analysis/variant-analysis-content-provider";
-import { VSCodeMockGitHubApiServer } from "./mocks/vscode-mock-gh-api-server";
+import { VSCodeMockGitHubApiServer } from "./common/mock-gh-api/vscode/vscode-mock-gh-api-server";
 import { VariantAnalysisResultsManager } from "./variant-analysis/variant-analysis-results-manager";
-import { ExtensionApp } from "./common/vscode/vscode-app";
-import { RepositoriesFilterSortStateWithIds } from "./pure/variant-analysis-filter-sort";
+import { ExtensionApp } from "./common/vscode/extension-app";
 import { DbModule } from "./databases/db-module";
-import { redactableError } from "./pure/errors";
+import { redactableError } from "./common/errors";
+import { QLDebugAdapterDescriptorFactory } from "./debugger/debugger-factory";
+import type { QueryHistoryDirs } from "./query-history/query-history-dirs";
+import type {
+  AllExtensionCommands,
+  BaseCommands,
+  PreActivationCommands,
+  QueryServerCommands,
+} from "./common/commands";
+import { getAstCfgCommands } from "./language-support/ast-viewer/ast-cfg-commands";
+import type { App } from "./common/app";
+import { registerCommandWithErrorHandling } from "./common/vscode/commands";
+import { DebuggerUI } from "./debugger/debugger-ui";
+import { ModelEditorModule } from "./model-editor/model-editor-module";
+import { TestManager } from "./query-testing/test-manager";
+import { TestRunner } from "./query-testing/test-runner";
+import { QueryRunner, QueryServerClient } from "./query-server";
+import { QueriesModule } from "./queries-panel/queries-module";
+import { OpenReferencedFileCodeLensProvider } from "./local-queries/open-referenced-file-code-lens-provider";
+import { LanguageContextStore } from "./language-context-store";
+import { LanguageSelectionPanel } from "./language-selection-panel/language-selection-panel";
+import { GitHubDatabasesModule } from "./databases/github-databases";
+import { DatabaseFetcher } from "./databases/database-fetcher";
+import { ComparePerformanceView } from "./compare-performance/compare-performance-view";
 
 /**
  * extension.ts
@@ -163,6 +168,81 @@ const extensionId = "GitHub.vscode-codeql";
 const extension = extensions.getExtension(extensionId);
 
 /**
+ * Return all commands that are not tied to the more specific managers.
+ */
+function getCommands(
+  app: App,
+  cliServer: CodeQLCliServer,
+  queryRunner: QueryRunner,
+  languageClient: LanguageClient,
+): BaseCommands {
+  const getCliVersion = async () => {
+    try {
+      return await cliServer.getVersion();
+    } catch {
+      return "<missing>";
+    }
+  };
+
+  const restartQueryServer = async () =>
+    withProgress(
+      async (progress: ProgressCallback) => {
+        // Restart all of the spawned servers: cli, query, and language.
+        cliServer.restartCliServer();
+        await Promise.all([
+          queryRunner.restartQueryServer(progress),
+          async () => {
+            if (languageClient.isRunning()) {
+              await languageClient.restart();
+            } else {
+              await languageClient.start();
+            }
+          },
+        ]);
+        void showAndLogInformationMessage(
+          queryServerLogger,
+          "CodeQL Query Server restarted.",
+        );
+      },
+      {
+        title: "Restarting Query Server",
+      },
+    );
+
+  return {
+    "codeQL.openDocumentation": async () => {
+      await env.openExternal(Uri.parse("https://codeql.github.com/docs/"));
+    },
+    "codeQL.restartQueryServer": restartQueryServer,
+    "codeQL.restartQueryServerOnConfigChange": restartQueryServer,
+    "codeQL.restartLegacyQueryServerOnConfigChange": restartQueryServer,
+    "codeQL.restartQueryServerOnExternalConfigChange": restartQueryServer,
+    "codeQL.copyVersion": async () => {
+      const text = `CodeQL extension version: ${
+        extension?.packageJSON.version
+      } \nCodeQL CLI version: ${await getCliVersion()} \nPlatform: ${platform()} ${arch()}`;
+      await env.clipboard.writeText(text);
+      void showAndLogInformationMessage(extLogger, text);
+    },
+    "codeQL.authenticateToGitHub": async () => {
+      /**
+       * Credentials for authenticating to GitHub.
+       * These are used when making API calls.
+       */
+      const octokit = await app.credentials.getOctokit();
+      const userInfo = await octokit.users.getAuthenticated();
+      void showAndLogInformationMessage(
+        extLogger,
+        `Authenticated to GitHub as user: ${userInfo.data.login}`,
+      );
+    },
+    "codeQL.showLogs": async () => {
+      extLogger.show();
+    },
+  };
+}
+
+/**
  * If the user tries to execute vscode commands after extension activation is failed, give
  * a sensible error message.
  *
@@ -186,7 +266,11 @@ function registerErrorStubs(
 
   stubbedCommands.forEach((command) => {
     if (excludedCommands.indexOf(command) === -1) {
-      errorStubs.push(commandRunner(command, stubGenerator(command)));
+      // This is purposefully using `registerCommandWithErrorHandling` instead of the command manager because these
+      // commands are untyped and registered pre-activation.
+      errorStubs.push(
+        registerCommandWithErrorHandling(command, stubGenerator(command)),
+      );
     }
   });
 }
@@ -202,16 +286,35 @@ export interface CodeQLExtensionInterface {
   readonly distributionManager: DistributionManager;
   readonly databaseManager: DatabaseManager;
   readonly databaseUI: DatabaseUI;
+  readonly localQueries: LocalQueries;
   readonly variantAnalysisManager: VariantAnalysisManager;
   readonly dispose: () => void;
 }
 
-// This is the minimum version of vscode that we _want_ to support. We want to update the language server library, but that
-// requires 1.67 or later. If we change the minimum version in the package.json, then anyone on an older version of vscode
+interface DistributionUpdateConfig {
+  isUserInitiated: boolean;
+  shouldDisplayMessageWhenNoUpdates: boolean;
+  allowAutoUpdating: boolean;
+}
+
+const shouldUpdateOnNextActivationKey = "shouldUpdateOnNextActivation";
+
+const codeQlVersionRange = DEFAULT_DISTRIBUTION_VERSION_RANGE;
+
+// This is the minimum version of vscode that we _want_ to support. We want to update to Node 20, but that
+// requires 1.90 or later. If we change the minimum version in the package.json, then anyone on an older version of vscode will
 // silently be unable to upgrade. So, the solution is to first bump the minimum version here and release. Then
 // bump the version in the package.json and release again. This way, anyone on an older version of vscode will get a warning
 // before silently being refused to upgrade.
-const MIN_VERSION = "1.67.0";
+const MIN_VERSION = "1.90.0";
+
+function sendConfigTelemetryData() {
+  const config: Record<string, string> = {};
+  config[ADD_DATABASE_SOURCE_TO_WORKSPACE_SETTING.qualifiedName] =
+    addDatabaseSourceToWorkspace().toString();
+
+  telemetryListener?.sendConfigInformation(config);
+}
 
 /**
  * Returns the CodeQLExtensionInterface, or an empty object if the interface is not
@@ -223,9 +326,10 @@ const MIN_VERSION = "1.67.0";
  *
  * @returns CodeQLExtensionInterface
  */
+// ts-unused-exports:disable-next-line
 export async function activate(
   ctx: ExtensionContext,
-): Promise<CodeQLExtensionInterface | Record<string, never>> {
+): Promise<CodeQLExtensionInterface | undefined> {
   void extLogger.log(`Starting ${extensionId} extension`);
   if (extension === undefined) {
     throw new Error(`Can't find extension ${extensionId}`);
@@ -233,27 +337,39 @@ export async function activate(
 
   const distributionConfigListener = new DistributionConfigListener();
   await initializeLogging(ctx);
-  await initializeTelemetry(extension, ctx);
+  const telemetryListener = await initializeTelemetry(extension, ctx);
+  addUnhandledRejectionListener();
   install();
 
-  const codelensProvider = new QuickEvalCodeLensProvider();
+  const app = new ExtensionApp(ctx);
+
+  sendConfigTelemetryData();
+
+  const quickEvalCodeLensProvider = new QuickEvalCodeLensProvider();
   languages.registerCodeLensProvider(
     { scheme: "file", language: "ql" },
-    codelensProvider,
+    quickEvalCodeLensProvider,
+  );
+
+  const openReferencedFileCodeLensProvider =
+    new OpenReferencedFileCodeLensProvider();
+  languages.registerCodeLensProvider(
+    { scheme: "file", pattern: "**/*.qlref" },
+    openReferencedFileCodeLensProvider,
   );
 
   ctx.subscriptions.push(distributionConfigListener);
-  const codeQlVersionRange = DEFAULT_DISTRIBUTION_VERSION_RANGE;
   const distributionManager = new DistributionManager(
     distributionConfigListener,
     codeQlVersionRange,
     ctx,
+    app.logger,
   );
-
-  const shouldUpdateOnNextActivationKey = "shouldUpdateOnNextActivation";
+  await distributionManager.initialize();
 
   registerErrorStubs([checkForUpdatesCommand], (command) => async () => {
     void showAndLogErrorMessage(
+      extLogger,
       `Can't execute ${command}: waiting to finish loading CodeQL CLI.`,
     );
   });
@@ -261,276 +377,363 @@ export async function activate(
   // Checking the vscode version should not block extension activation.
   void assertVSCodeVersionGreaterThan(MIN_VERSION, ctx);
 
-  interface DistributionUpdateConfig {
-    isUserInitiated: boolean;
-    shouldDisplayMessageWhenNoUpdates: boolean;
-    allowAutoUpdating: boolean;
-  }
-
-  async function installOrUpdateDistributionWithProgressTitle(
-    progressTitle: string,
-    config: DistributionUpdateConfig,
-  ): Promise<void> {
-    const minSecondsSinceLastUpdateCheck = config.isUserInitiated ? 0 : 86400;
-    const noUpdatesLoggingFunc = config.shouldDisplayMessageWhenNoUpdates
-      ? showAndLogInformationMessage
-      : async (message: string) => void extLogger.log(message);
-    const result =
-      await distributionManager.checkForUpdatesToExtensionManagedDistribution(
-        minSecondsSinceLastUpdateCheck,
-      );
-
-    // We do want to auto update if there is no distribution at all
-    const allowAutoUpdating =
-      config.allowAutoUpdating ||
-      !(await distributionManager.hasDistribution());
-
-    switch (result.kind) {
-      case DistributionUpdateCheckResultKind.AlreadyCheckedRecentlyResult:
-        void extLogger.log(
-          "Didn't perform CodeQL CLI update check since a check was already performed within the previous " +
-            `${minSecondsSinceLastUpdateCheck} seconds.`,
-        );
-        break;
-      case DistributionUpdateCheckResultKind.AlreadyUpToDate:
-        await noUpdatesLoggingFunc("CodeQL CLI already up to date.");
-        break;
-      case DistributionUpdateCheckResultKind.InvalidLocation:
-        await noUpdatesLoggingFunc(
-          "CodeQL CLI is installed externally so could not be updated.",
-        );
-        break;
-      case DistributionUpdateCheckResultKind.UpdateAvailable:
-        if (beganMainExtensionActivation || !allowAutoUpdating) {
-          const updateAvailableMessage =
-            `Version "${result.updatedRelease.name}" of the CodeQL CLI is now available. ` +
-            "Do you wish to upgrade?";
-          await ctx.globalState.update(shouldUpdateOnNextActivationKey, true);
-          if (
-            await showInformationMessageWithAction(
-              updateAvailableMessage,
-              "Restart and Upgrade",
-            )
-          ) {
-            await commands.executeCommand("workbench.action.reloadWindow");
-          }
-        } else {
-          const progressOptions: ProgressOptions = {
-            title: progressTitle,
-            location: ProgressLocation.Notification,
-          };
-
-          await withProgress(progressOptions, (progress) =>
-            distributionManager.installExtensionManagedDistributionRelease(
-              result.updatedRelease,
-              progress,
-            ),
-          );
-
-          await ctx.globalState.update(shouldUpdateOnNextActivationKey, false);
-          void showAndLogInformationMessage(
-            `CodeQL CLI updated to version "${result.updatedRelease.name}".`,
-          );
-        }
-        break;
-      default:
-        assertNever(result);
-    }
-  }
-
-  async function installOrUpdateDistribution(
-    config: DistributionUpdateConfig,
-  ): Promise<void> {
-    if (isInstallingOrUpdatingDistribution) {
-      throw new Error("Already installing or updating CodeQL CLI");
-    }
-    isInstallingOrUpdatingDistribution = true;
-    const codeQlInstalled =
-      (await distributionManager.getCodeQlPathWithoutVersionCheck()) !==
-      undefined;
-    const willUpdateCodeQl = ctx.globalState.get(
-      shouldUpdateOnNextActivationKey,
-    );
-    const messageText = willUpdateCodeQl
-      ? "Updating CodeQL CLI"
-      : codeQlInstalled
-      ? "Checking for updates to CodeQL CLI"
-      : "Installing CodeQL CLI";
-
-    try {
-      await installOrUpdateDistributionWithProgressTitle(messageText, config);
-    } catch (e) {
-      // Don't rethrow the exception, because if the config is changed, we want to be able to retry installing
-      // or updating the distribution.
-      const alertFunction =
-        codeQlInstalled && !config.isUserInitiated
-          ? showAndLogWarningMessage
-          : showAndLogErrorMessage;
-      const taskDescription = `${
-        willUpdateCodeQl
-          ? "update"
-          : codeQlInstalled
-          ? "check for updates to"
-          : "install"
-      } CodeQL CLI`;
-
-      if (e instanceof GithubRateLimitedError) {
-        void alertFunction(
-          `Rate limited while trying to ${taskDescription}. Please try again after ` +
-            `your rate limit window resets at ${e.rateLimitResetDate.toLocaleString(
-              env.language,
-            )}.`,
-        );
-      } else if (e instanceof GithubApiError) {
-        void alertFunction(
-          `Encountered GitHub API error while trying to ${taskDescription}. ${e}`,
-        );
-      }
-      void alertFunction(`Unable to ${taskDescription}. ${e}`);
-    } finally {
-      isInstallingOrUpdatingDistribution = false;
-    }
-  }
-
-  async function getDistributionDisplayingDistributionWarnings(): Promise<FindDistributionResult> {
-    const result = await distributionManager.getDistribution();
-    switch (result.kind) {
-      case FindDistributionResultKind.CompatibleDistribution:
-        void extLogger.log(
-          `Found compatible version of CodeQL CLI (version ${result.version.raw})`,
-        );
-        break;
-      case FindDistributionResultKind.IncompatibleDistribution: {
-        const fixGuidanceMessage = (() => {
-          switch (result.distribution.kind) {
-            case DistributionKind.ExtensionManaged:
-              return 'Please update the CodeQL CLI by running the "CodeQL: Check for CLI Updates" command.';
-            case DistributionKind.CustomPathConfig:
-              return `Please update the \"CodeQL CLI Executable Path\" setting to point to a CLI in the version range ${codeQlVersionRange}.`;
-            case DistributionKind.PathEnvironmentVariable:
-              return (
-                `Please update the CodeQL CLI on your PATH to a version compatible with ${codeQlVersionRange}, or ` +
-                `set the \"CodeQL CLI Executable Path\" setting to the path of a CLI version compatible with ${codeQlVersionRange}.`
-              );
-          }
-        })();
-
-        void showAndLogWarningMessage(
-          `The current version of the CodeQL CLI (${result.version.raw}) ` +
-            `is incompatible with this extension. ${fixGuidanceMessage}`,
-        );
-        break;
-      }
-      case FindDistributionResultKind.UnknownCompatibilityDistribution:
-        void showAndLogWarningMessage(
-          "Compatibility with the configured CodeQL CLI could not be determined. " +
-            "You may experience problems using the extension.",
-        );
-        break;
-      case FindDistributionResultKind.NoDistribution:
-        void showAndLogErrorMessage("The CodeQL CLI could not be found.");
-        break;
-      default:
-        assertNever(result);
-    }
-    return result;
-  }
-
-  async function installOrUpdateThenTryActivate(
-    config: DistributionUpdateConfig,
-  ): Promise<CodeQLExtensionInterface | Record<string, never>> {
-    await installOrUpdateDistribution(config);
-
-    // Display the warnings even if the extension has already activated.
-    const distributionResult =
-      await getDistributionDisplayingDistributionWarnings();
-    let extensionInterface: CodeQLExtensionInterface | Record<string, never> =
-      {};
-    if (
-      !beganMainExtensionActivation &&
-      distributionResult.kind !== FindDistributionResultKind.NoDistribution
-    ) {
-      extensionInterface = await activateWithInstalledDistribution(
-        ctx,
-        distributionManager,
-        distributionConfigListener,
-      );
-    } else if (
-      distributionResult.kind === FindDistributionResultKind.NoDistribution
-    ) {
-      registerErrorStubs([checkForUpdatesCommand], (command) => async () => {
-        const installActionName = "Install CodeQL CLI";
-        const chosenAction = await showAndLogErrorMessage(
-          `Can't execute ${command}: missing CodeQL CLI.`,
-          {
-            items: [installActionName],
-          },
-        );
-        if (chosenAction === installActionName) {
-          await installOrUpdateThenTryActivate({
-            isUserInitiated: true,
-            shouldDisplayMessageWhenNoUpdates: false,
-            allowAutoUpdating: true,
-          });
-        }
-      });
-    }
-    return extensionInterface;
-  }
-
   ctx.subscriptions.push(
     distributionConfigListener.onDidChangeConfiguration(() =>
-      installOrUpdateThenTryActivate({
-        isUserInitiated: true,
-        shouldDisplayMessageWhenNoUpdates: false,
-        allowAutoUpdating: true,
-      }),
+      installOrUpdateThenTryActivate(
+        ctx,
+        app,
+        distributionManager,
+        distributionConfigListener,
+        {
+          isUserInitiated: true,
+          shouldDisplayMessageWhenNoUpdates: false,
+          allowAutoUpdating: true,
+        },
+      ),
     ),
   );
   ctx.subscriptions.push(
-    commandRunner(checkForUpdatesCommand, () =>
-      installOrUpdateThenTryActivate({
-        isUserInitiated: true,
-        shouldDisplayMessageWhenNoUpdates: true,
-        allowAutoUpdating: true,
-      }),
+    // This is purposefully using `registerCommandWithErrorHandling` directly instead of the command manager
+    // because this command is registered pre-activation.
+    registerCommandWithErrorHandling(checkForUpdatesCommand, () =>
+      installOrUpdateThenTryActivate(
+        ctx,
+        app,
+        distributionManager,
+        distributionConfigListener,
+        {
+          isUserInitiated: true,
+          shouldDisplayMessageWhenNoUpdates: true,
+          allowAutoUpdating: true,
+        },
+      ),
     ),
   );
 
-  const variantAnalysisViewSerializer = new VariantAnalysisViewSerializer(ctx);
+  const variantAnalysisViewSerializer = new VariantAnalysisViewSerializer(app);
   Window.registerWebviewPanelSerializer(
     VariantAnalysisView.viewType,
     variantAnalysisViewSerializer,
   );
 
-  const codeQlExtension = await installOrUpdateThenTryActivate({
-    isUserInitiated: !!ctx.globalState.get(shouldUpdateOnNextActivationKey),
-    shouldDisplayMessageWhenNoUpdates: false,
+  const codeQlExtension = await installOrUpdateThenTryActivate(
+    ctx,
+    app,
+    distributionManager,
+    distributionConfigListener,
+    {
+      isUserInitiated: !!ctx.globalState.get(shouldUpdateOnNextActivationKey),
+      shouldDisplayMessageWhenNoUpdates: false,
 
-    // only auto update on startup if the user has previously requested an update
-    // otherwise, ask user to accept the update
-    allowAutoUpdating: !!ctx.globalState.get(shouldUpdateOnNextActivationKey),
-  });
-
-  variantAnalysisViewSerializer.onExtensionLoaded(
-    codeQlExtension.variantAnalysisManager,
+      // only auto update on startup if the user has previously requested an update
+      // otherwise, ask user to accept the update
+      allowAutoUpdating: !!ctx.globalState.get(shouldUpdateOnNextActivationKey),
+    },
   );
+
+  if (codeQlExtension !== undefined) {
+    variantAnalysisViewSerializer.onExtensionLoaded(
+      codeQlExtension.variantAnalysisManager,
+    );
+    codeQlExtension.cliServer.addVersionChangedListener((ver) => {
+      telemetryListener.cliVersion = ver?.version;
+    });
+
+    let unsupportedWarningShown = false;
+    codeQlExtension.cliServer.addVersionChangedListener((ver) => {
+      if (!ver) {
+        return;
+      }
+
+      if (unsupportedWarningShown) {
+        return;
+      }
+
+      if (
+        CliVersionConstraint.OLDEST_SUPPORTED_CLI_VERSION.compare(
+          ver.version,
+        ) <= 0
+      ) {
+        return;
+      }
+
+      void showAndLogWarningMessage(
+        extLogger,
+        `You are using an unsupported version of the CodeQL CLI (${ver.version}). ` +
+          `The minimum supported version is ${CliVersionConstraint.OLDEST_SUPPORTED_CLI_VERSION}. ` +
+          `Please upgrade to a newer version of the CodeQL CLI.`,
+      );
+      unsupportedWarningShown = true;
+    });
+  }
 
   return codeQlExtension;
 }
 
-const PACK_GLOBS = [
+async function installOrUpdateDistributionWithProgressTitle(
+  ctx: ExtensionContext,
+  app: ExtensionApp,
+  distributionManager: DistributionManager,
+  progressTitle: string,
+  config: DistributionUpdateConfig,
+): Promise<void> {
+  const minSecondsSinceLastUpdateCheck = config.isUserInitiated ? 0 : 86400;
+  const noUpdatesLoggingFunc = config.shouldDisplayMessageWhenNoUpdates
+    ? showAndLogInformationMessage
+    : async (logger: BaseLogger, message: string) => void logger.log(message);
+  const result =
+    await distributionManager.checkForUpdatesToExtensionManagedDistribution(
+      minSecondsSinceLastUpdateCheck,
+    );
+
+  // We do want to auto update if there is no distribution at all
+  const allowAutoUpdating =
+    config.allowAutoUpdating || !(await distributionManager.hasDistribution());
+
+  switch (result.kind) {
+    case DistributionUpdateCheckResultKind.AlreadyCheckedRecentlyResult:
+      void extLogger.log(
+        "Didn't perform CodeQL CLI update check since a check was already performed within the previous " +
+          `${minSecondsSinceLastUpdateCheck} seconds.`,
+      );
+      break;
+    case DistributionUpdateCheckResultKind.AlreadyUpToDate:
+      await noUpdatesLoggingFunc(extLogger, "CodeQL CLI already up to date.");
+      break;
+    case DistributionUpdateCheckResultKind.InvalidLocation:
+      await noUpdatesLoggingFunc(
+        extLogger,
+        "CodeQL CLI is installed externally so could not be updated.",
+      );
+      break;
+    case DistributionUpdateCheckResultKind.UpdateAvailable:
+      if (beganMainExtensionActivation || !allowAutoUpdating) {
+        const updateAvailableMessage =
+          `Version "${result.updatedRelease.name}" of the CodeQL CLI is now available. ` +
+          "Do you wish to upgrade?";
+        await ctx.globalState.update(shouldUpdateOnNextActivationKey, true);
+        if (
+          await showInformationMessageWithAction(
+            updateAvailableMessage,
+            "Restart and Upgrade",
+          )
+        ) {
+          await app.commands.execute("workbench.action.reloadWindow");
+        }
+      } else {
+        await withProgress(
+          (progress) =>
+            distributionManager.installExtensionManagedDistributionRelease(
+              result.updatedRelease,
+              progress,
+            ),
+          {
+            title: progressTitle,
+          },
+        );
+
+        await ctx.globalState.update(shouldUpdateOnNextActivationKey, false);
+        void showAndLogInformationMessage(
+          extLogger,
+          `CodeQL CLI updated to version "${result.updatedRelease.name}".`,
+        );
+      }
+      break;
+    default:
+      assertNever(result);
+  }
+}
+
+async function installOrUpdateDistribution(
+  ctx: ExtensionContext,
+  app: ExtensionApp,
+  distributionManager: DistributionManager,
+  config: DistributionUpdateConfig,
+): Promise<void> {
+  if (isInstallingOrUpdatingDistribution) {
+    throw new Error("Already installing or updating CodeQL CLI");
+  }
+  isInstallingOrUpdatingDistribution = true;
+  const codeQlInstalled =
+    (await distributionManager.getCodeQlPathWithoutVersionCheck()) !==
+    undefined;
+  const willUpdateCodeQl = ctx.globalState.get(shouldUpdateOnNextActivationKey);
+  const messageText = willUpdateCodeQl
+    ? "Updating CodeQL CLI"
+    : codeQlInstalled
+      ? "Checking for updates to CodeQL CLI"
+      : "Installing CodeQL CLI";
+
+  try {
+    await installOrUpdateDistributionWithProgressTitle(
+      ctx,
+      app,
+      distributionManager,
+      messageText,
+      config,
+    );
+  } catch (e) {
+    // Don't rethrow the exception, because if the config is changed, we want to be able to retry installing
+    // or updating the distribution.
+    const alertFunction =
+      codeQlInstalled && !config.isUserInitiated
+        ? showAndLogWarningMessage
+        : showAndLogErrorMessage;
+    const taskDescription = `${
+      willUpdateCodeQl
+        ? "update"
+        : codeQlInstalled
+          ? "check for updates to"
+          : "install"
+    } CodeQL CLI`;
+
+    if (e instanceof GithubRateLimitedError) {
+      void alertFunction(
+        extLogger,
+        `Rate limited while trying to ${taskDescription}. Please try again after ` +
+          `your rate limit window resets at ${e.rateLimitResetDate.toLocaleString(
+            env.language,
+          )}.`,
+      );
+    } else if (e instanceof GithubApiError) {
+      void alertFunction(
+        extLogger,
+        `Encountered GitHub API error while trying to ${taskDescription}. ${e}`,
+      );
+    }
+    void alertFunction(extLogger, `Unable to ${taskDescription}. ${e}`);
+  } finally {
+    isInstallingOrUpdatingDistribution = false;
+  }
+}
+
+async function getDistributionDisplayingDistributionWarnings(
+  distributionManager: DistributionManager,
+): Promise<FindDistributionResult> {
+  const result = await distributionManager.getDistribution();
+  switch (result.kind) {
+    case FindDistributionResultKind.CompatibleDistribution:
+      void extLogger.log(
+        `Found compatible version of CodeQL CLI (version ${result.versionAndFeatures.version.raw})`,
+      );
+      break;
+    case FindDistributionResultKind.IncompatibleDistribution: {
+      const fixGuidanceMessage = (() => {
+        switch (result.distribution.kind) {
+          case DistributionKind.ExtensionManaged:
+            return 'Please update the CodeQL CLI by running the "CodeQL: Check for CLI Updates" command.';
+          case DistributionKind.CustomPathConfig:
+            return `Please update the "CodeQL CLI Executable Path" setting to point to a CLI in the version range ${codeQlVersionRange}.`;
+          case DistributionKind.PathEnvironmentVariable:
+            return (
+              `Please update the CodeQL CLI on your PATH to a version compatible with ${codeQlVersionRange}, or ` +
+              `set the "CodeQL CLI Executable Path" setting to the path of a CLI version compatible with ${codeQlVersionRange}.`
+            );
+        }
+      })();
+
+      void showAndLogWarningMessage(
+        extLogger,
+        `The current version of the CodeQL CLI (${result.versionAndFeatures.version.raw}) ` +
+          `is incompatible with this extension. ${fixGuidanceMessage}`,
+      );
+      break;
+    }
+    case FindDistributionResultKind.UnknownCompatibilityDistribution:
+      void showAndLogWarningMessage(
+        extLogger,
+        "Compatibility with the configured CodeQL CLI could not be determined. " +
+          "You may experience problems using the extension.",
+      );
+      break;
+    case FindDistributionResultKind.NoDistribution:
+      void showAndLogErrorMessage(
+        extLogger,
+        "The CodeQL CLI could not be found.",
+      );
+      break;
+    default:
+      assertNever(result);
+  }
+  return result;
+}
+
+async function installOrUpdateThenTryActivate(
+  ctx: ExtensionContext,
+  app: ExtensionApp,
+  distributionManager: DistributionManager,
+  distributionConfigListener: DistributionConfigListener,
+  config: DistributionUpdateConfig,
+): Promise<CodeQLExtensionInterface | undefined> {
+  await installOrUpdateDistribution(ctx, app, distributionManager, config);
+
+  try {
+    await prepareCodeTour(app.commands);
+  } catch (e: unknown) {
+    void extLogger.log(
+      `Could not open tutorial workspace automatically: ${getErrorMessage(e)}`,
+    );
+  }
+
+  // Display the warnings even if the extension has already activated.
+  const distributionResult =
+    await getDistributionDisplayingDistributionWarnings(distributionManager);
+  if (
+    !beganMainExtensionActivation &&
+    distributionResult.kind !== FindDistributionResultKind.NoDistribution
+  ) {
+    return await activateWithInstalledDistribution(
+      ctx,
+      app,
+      distributionManager,
+      distributionConfigListener,
+    );
+  }
+
+  if (distributionResult.kind === FindDistributionResultKind.NoDistribution) {
+    registerErrorStubs([checkForUpdatesCommand], (command) => async () => {
+      void extLogger.log(`Can't execute ${command}: missing CodeQL CLI.`);
+      const showLogName = "Show Log";
+      const installActionName = "Install CodeQL CLI";
+      const chosenAction = await Window.showErrorMessage(
+        `Can't execute ${command}: missing CodeQL CLI.`,
+        showLogName,
+        installActionName,
+      );
+      if (chosenAction === showLogName) {
+        extLogger.show();
+      } else if (chosenAction === installActionName) {
+        await installOrUpdateThenTryActivate(
+          ctx,
+          app,
+          distributionManager,
+          distributionConfigListener,
+          {
+            isUserInitiated: true,
+            shouldDisplayMessageWhenNoUpdates: false,
+            allowAutoUpdating: true,
+          },
+        );
+      }
+    });
+  }
+  return undefined;
+}
+
+const CLEAR_PACK_CACHE_ON_EDIT_GLOBS = [
   "**/codeql-pack.yml",
   "**/qlpack.yml",
   "**/queries.xml",
   "**/codeql-pack.lock.yml",
   "**/qlpack.lock.yml",
+  "**/*.dbscheme",
   ".codeqlmanifest.json",
   "codeql-workspace.yml",
 ];
 
 async function activateWithInstalledDistribution(
   ctx: ExtensionContext,
+  app: ExtensionApp,
   distributionManager: DistributionManager,
   distributionConfigListener: DistributionConfigListener,
 ): Promise<CodeQLExtensionInterface> {
@@ -539,8 +742,6 @@ async function activateWithInstalledDistribution(
   // of activation.
   errorStubs.forEach((stub) => stub.dispose());
 
-  const app = new ExtensionApp(ctx);
-
   void extLogger.log("Initializing configuration listener...");
   const qlConfigurationListener =
     await QueryServerConfigListener.createQueryServerConfigListener(
@@ -548,14 +749,19 @@ async function activateWithInstalledDistribution(
     );
   ctx.subscriptions.push(qlConfigurationListener);
 
+  void extLogger.log("Initializing CodeQL language server.");
+  const languageClient = createLanguageClient(qlConfigurationListener);
+
   void extLogger.log("Initializing CodeQL cli server...");
   const cliServer = new CodeQLCliServer(
     app,
+    languageClient,
     distributionManager,
     new CliConfigListener(),
     extLogger,
   );
   ctx.subscriptions.push(cliServer);
+  watchExternalConfigFile(app, ctx);
 
   const statusBar = new CodeQlStatusBarHandler(
     cliServer,
@@ -564,33 +770,68 @@ async function activateWithInstalledDistribution(
   ctx.subscriptions.push(statusBar);
 
   void extLogger.log("Initializing query server client.");
-  const qs = await createQueryServer(qlConfigurationListener, cliServer, ctx);
+  const qs = await createQueryServer(
+    app,
+    qlConfigurationListener,
+    cliServer,
+    ctx,
+  );
 
-  for (const glob of PACK_GLOBS) {
+  for (const glob of CLEAR_PACK_CACHE_ON_EDIT_GLOBS) {
     const fsWatcher = workspace.createFileSystemWatcher(glob);
     ctx.subscriptions.push(fsWatcher);
-    fsWatcher.onDidChange(async (_uri) => {
+
+    const clearPackCache = async (_uri: Uri) => {
       await qs.clearPackCache();
-    });
+    };
+
+    fsWatcher.onDidCreate(clearPackCache);
+    fsWatcher.onDidChange(clearPackCache);
+    fsWatcher.onDidDelete(clearPackCache);
   }
 
+  void extLogger.log("Initializing language context.");
+  const languageContext = new LanguageContextStore(app);
+
+  void extLogger.log("Initializing language selector.");
+  const languageSelectionPanel = new LanguageSelectionPanel(languageContext);
+  ctx.subscriptions.push(languageSelectionPanel);
+
   void extLogger.log("Initializing database manager.");
-  const dbm = new DatabaseManager(ctx, qs, cliServer, extLogger);
+  const dbm = new DatabaseManager(
+    ctx,
+    app,
+    qs,
+    cliServer,
+    languageContext,
+    extLogger,
+  );
 
   // Let this run async.
   void dbm.loadPersistedState();
 
+  const databaseFetcher = new DatabaseFetcher(
+    app,
+    dbm,
+    getContextStoragePath(ctx),
+    cliServer,
+  );
+
   ctx.subscriptions.push(dbm);
+
   void extLogger.log("Initializing database panel.");
   const databaseUI = new DatabaseUI(
     app,
     dbm,
+    databaseFetcher,
+    languageContext,
     qs,
     getContextStoragePath(ctx),
     ctx.extensionPath,
   );
-  databaseUI.init();
   ctx.subscriptions.push(databaseUI);
+
+  const queriesModule = QueriesModule.initialize(app, languageContext);
 
   void extLogger.log("Initializing evaluator log viewer.");
   const evalLogViewer = new EvalLogViewer();
@@ -599,17 +840,24 @@ async function activateWithInstalledDistribution(
   void extLogger.log("Initializing query history manager.");
   const queryHistoryConfigurationListener = new QueryHistoryConfigListener();
   ctx.subscriptions.push(queryHistoryConfigurationListener);
-  const showResults = async (item: CompletedLocalQueryInfo) =>
-    showResultsForCompletedQuery(item, WebviewReveal.Forced);
   const queryStorageDir = join(ctx.globalStorageUri.fsPath, "queries");
   await ensureDir(queryStorageDir);
+
+  // Store contextual queries in a temporary folder so that they are removed
+  // when the application closes. There is no need for the user to interact with them.
+  const contextualQueryStorageDir = join(
+    tmpDir.name,
+    "contextual-query-storage",
+  );
+  await ensureDir(contextualQueryStorageDir);
+
   const labelProvider = new HistoryItemLabelProvider(
     queryHistoryConfigurationListener,
   );
 
   void extLogger.log("Initializing results panel interface.");
   const localQueryResultsView = new ResultsView(
-    ctx,
+    app,
     dbm,
     cliServer,
     queryServerLogger,
@@ -626,18 +874,20 @@ async function activateWithInstalledDistribution(
     "variant-analyses",
   );
   await ensureDir(variantAnalysisStorageDir);
+  const variantAnalysisConfig = new VariantAnalysisConfigListener();
   const variantAnalysisResultsManager = new VariantAnalysisResultsManager(
     cliServer,
+    variantAnalysisConfig,
     extLogger,
   );
 
   const variantAnalysisManager = new VariantAnalysisManager(
-    ctx,
     app,
     cliServer,
     variantAnalysisStorageDir,
     variantAnalysisResultsManager,
-    dbModule?.dbManager,
+    dbModule.dbManager,
+    variantAnalysisConfig,
   );
   ctx.subscriptions.push(variantAnalysisManager);
   ctx.subscriptions.push(variantAnalysisResultsManager);
@@ -648,19 +898,42 @@ async function activateWithInstalledDistribution(
     ),
   );
 
+  const githubDatabaseConfigListener = new GitHubDatabaseConfigListener();
+
+  await GitHubDatabasesModule.initialize(
+    app,
+    dbm,
+    databaseFetcher,
+    githubDatabaseConfigListener,
+  );
+
   void extLogger.log("Initializing query history.");
+  const queryHistoryDirs: QueryHistoryDirs = {
+    localQueriesDirPath: queryStorageDir,
+    variantAnalysesDirPath: variantAnalysisStorageDir,
+  };
+
   const qhm = new QueryHistoryManager(
+    app,
     qs,
     dbm,
     localQueryResultsView,
     variantAnalysisManager,
     evalLogViewer,
-    queryStorageDir,
+    queryHistoryDirs,
     ctx,
     queryHistoryConfigurationListener,
     labelProvider,
-    async (from: CompletedLocalQueryInfo, to: CompletedLocalQueryInfo) =>
-      showResultsForComparison(from, to),
+    languageContext,
+    async (
+      from: CompletedLocalQueryInfo,
+      to: CompletedLocalQueryInfo,
+    ): Promise<void> => showResultsForComparison(compareView, from, to),
+    async (
+      from: CompletedLocalQueryInfo,
+      to: CompletedLocalQueryInfo | undefined,
+    ): Promise<void> =>
+      showPerformanceComparison(comparePerformanceView, from, to),
   );
 
   ctx.subscriptions.push(qhm);
@@ -676,100 +949,27 @@ async function activateWithInstalledDistribution(
 
   void extLogger.log("Initializing compare view.");
   const compareView = new CompareView(
-    ctx,
+    app,
     dbm,
     cliServer,
     queryServerLogger,
     labelProvider,
-    showResults,
+    async (item: CompletedLocalQueryInfo) =>
+      localQueries.showResultsForCompletedQuery(item, WebviewReveal.Forced),
   );
   ctx.subscriptions.push(compareView);
 
+  void extLogger.log("Initializing performance comparison view.");
+  const comparePerformanceView = new ComparePerformanceView(
+    app,
+    queryServerLogger,
+    labelProvider,
+    localQueryResultsView,
+  );
+  ctx.subscriptions.push(comparePerformanceView);
+
   void extLogger.log("Initializing source archive filesystem provider.");
-  archiveFilesystemProvider_activate(ctx);
-
-  async function showResultsForComparison(
-    from: CompletedLocalQueryInfo,
-    to: CompletedLocalQueryInfo,
-  ): Promise<void> {
-    try {
-      await compareView.showResults(from, to);
-    } catch (e) {
-      void showAndLogExceptionWithTelemetry(
-        redactableError(asError(e))`Failed to show results: ${getErrorMessage(
-          e,
-        )}`,
-      );
-    }
-  }
-
-  async function showResultsForCompletedQuery(
-    query: CompletedLocalQueryInfo,
-    forceReveal: WebviewReveal,
-  ): Promise<void> {
-    await localQueryResultsView.showResults(query, forceReveal, false);
-  }
-
-  async function compileAndRunQuery(
-    quickEval: boolean,
-    selectedQuery: Uri | undefined,
-    progress: ProgressCallback,
-    token: CancellationToken,
-    databaseItem: DatabaseItem | undefined,
-    range?: Range,
-  ): Promise<void> {
-    if (qs !== undefined) {
-      // If no databaseItem is specified, use the database currently selected in the Databases UI
-      databaseItem =
-        databaseItem || (await databaseUI.getDatabaseItem(progress, token));
-      if (databaseItem === undefined) {
-        throw new Error("Can't run query without a selected database");
-      }
-      const databaseInfo = {
-        name: databaseItem.name,
-        databaseUri: databaseItem.databaseUri.toString(),
-      };
-
-      // handle cancellation from the history view.
-      const source = new CancellationTokenSource();
-      token.onCancellationRequested(() => source.cancel());
-
-      const initialInfo = await createInitialQueryInfo(
-        selectedQuery,
-        databaseInfo,
-        quickEval,
-        range,
-      );
-      const item = new LocalQueryInfo(initialInfo, source);
-      qhm.addQuery(item);
-      try {
-        const completedQueryInfo = await qs.compileAndRunQueryAgainstDatabase(
-          databaseItem,
-          initialInfo,
-          queryStorageDir,
-          progress,
-          source.token,
-          undefined,
-          item,
-        );
-        qhm.completeQuery(item, completedQueryInfo);
-        await showResultsForCompletedQuery(
-          item as CompletedLocalQueryInfo,
-          WebviewReveal.Forced,
-        );
-        // Note we must update the query history view after showing results as the
-        // display and sorting might depend on the number of results
-      } catch (e) {
-        const err = asError(e);
-        err.message = `Error running query: ${err.message}`;
-        item.failureReason = err.message;
-        throw e;
-      } finally {
-        await qhm.refreshTreeView();
-        source.dispose();
-      }
-    }
-  }
+  archiveFilesystemProvider_activate(ctx, dbm);
 
   const qhelpTmpDir = dirSync({
     prefix: "qhelp_",
@@ -778,649 +978,57 @@ async function activateWithInstalledDistribution(
   });
   ctx.subscriptions.push({ dispose: qhelpTmpDir.removeCallback });
 
-  async function previewQueryHelp(selectedQuery: Uri): Promise<void> {
-    // selectedQuery is unpopulated when executing through the command palette
-    const pathToQhelp = selectedQuery
-      ? selectedQuery.fsPath
-      : window.activeTextEditor?.document.uri.fsPath;
-    if (pathToQhelp) {
-      // Create temporary directory
-      const relativePathToMd = `${basename(pathToQhelp, ".qhelp")}.md`;
-      const absolutePathToMd = join(qhelpTmpDir.name, relativePathToMd);
-      const uri = Uri.file(absolutePathToMd);
-      try {
-        await cliServer.generateQueryHelp(pathToQhelp, absolutePathToMd);
-        await commands.executeCommand("markdown.showPreviewToSide", uri);
-      } catch (e) {
-        const errorMessage = getErrorMessage(e).includes(
-          "Generating qhelp in markdown",
-        )
-          ? redactableError`Could not generate markdown from ${pathToQhelp}: Bad formatting in .qhelp file.`
-          : redactableError`Could not open a preview of the generated file (${absolutePathToMd}).`;
-        void showAndLogExceptionWithTelemetry(errorMessage, {
-          fullMessage: `${errorMessage}\n${getErrorMessage(e)}`,
-        });
-      }
-    }
-  }
-
-  async function openReferencedFile(selectedQuery: Uri): Promise<void> {
-    // If no file is selected, the path of the file in the editor is selected
-    const path =
-      selectedQuery?.fsPath || window.activeTextEditor?.document.uri.fsPath;
-    if (qs !== undefined && path) {
-      const resolved = await cliServer.resolveQlref(path);
-      const uri = Uri.file(resolved.resolvedPath);
-      await window.showTextDocument(uri, { preview: false });
-    }
-  }
-
   ctx.subscriptions.push(tmpDirDisposal);
 
-  void extLogger.log("Initializing CodeQL language server.");
-  const client = new LanguageClient(
-    "CodeQL Language Server",
-    () => spawnIdeServer(qlConfigurationListener),
-    {
-      documentSelector: [
-        { language: "ql", scheme: "file" },
-        { language: "yaml", scheme: "file", pattern: "**/qlpack.yml" },
-        { language: "yaml", scheme: "file", pattern: "**/codeql-pack.yml" },
-      ],
-      synchronize: {
-        configurationSection: "codeQL",
-      },
-      // Ensure that language server exceptions are logged to the same channel as its output.
-      outputChannel: ideServerLogger.outputChannel,
-    },
-    true,
+  const localQueries = new LocalQueries(
+    app,
+    qs,
+    qhm,
+    dbm,
+    databaseFetcher,
+    cliServer,
+    databaseUI,
+    localQueryResultsView,
+    queryStorageDir,
+    languageContext,
+  );
+  ctx.subscriptions.push(localQueries);
+
+  queriesModule.onDidChangeSelection((event) =>
+    localQueries.setSelectedQueryTreeViewItems(event.selection),
+  );
+
+  void extLogger.log("Initializing debugger factory.");
+  ctx.subscriptions.push(
+    new QLDebugAdapterDescriptorFactory(queryStorageDir, qs, localQueries),
+  );
+
+  void extLogger.log("Initializing debugger UI.");
+  const debuggerUI = new DebuggerUI(app, localQueries, dbm);
+  ctx.subscriptions.push(debuggerUI);
+
+  const modelEditorModule = await ModelEditorModule.initialize(
+    app,
+    dbm,
+    databaseFetcher,
+    variantAnalysisManager,
+    cliServer,
+    qs,
+    tmpDir.name,
   );
 
   void extLogger.log("Initializing QLTest interface.");
-  const testExplorerExtension = extensions.getExtension<TestHub>(
-    testExplorerExtensionId,
-  );
-  if (testExplorerExtension) {
-    const testHub = testExplorerExtension.exports;
-    const testAdapterFactory = new QLTestAdapterFactory(
-      testHub,
-      cliServer,
-      dbm,
-    );
-    ctx.subscriptions.push(testAdapterFactory);
 
-    const testUIService = new TestUIService(testHub);
-    ctx.subscriptions.push(testUIService);
-  }
+  const testRunner = new TestRunner(dbm, cliServer);
+  ctx.subscriptions.push(testRunner);
 
-  void extLogger.log("Registering top-level command palette commands.");
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.runQuery",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        uri: Uri | undefined,
-      ) => await compileAndRunQuery(false, uri, progress, token, undefined),
-      {
-        title: "Running query",
-        cancellable: true,
-      },
+  const testManager = new TestManager(app, testRunner, cliServer);
+  ctx.subscriptions.push(testManager);
 
-      // Open the query server logger on error since that's usually where the interesting errors appear.
-      queryServerLogger,
-    ),
-  );
-  interface DatabaseQuickPickItem extends QuickPickItem {
-    databaseItem: DatabaseItem;
-  }
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.runQueryOnMultipleDatabases",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        uri: Uri | undefined,
-      ) => {
-        let filteredDBs = dbm.databaseItems;
-        if (filteredDBs.length === 0) {
-          void showAndLogErrorMessage(
-            "No databases found. Please add a suitable database to your workspace.",
-          );
-          return;
-        }
-        // If possible, only show databases with the right language (otherwise show all databases).
-        const queryLanguage = await findLanguage(cliServer, uri);
-        if (queryLanguage) {
-          filteredDBs = dbm.databaseItems.filter(
-            (db) => db.language === queryLanguage,
-          );
-          if (filteredDBs.length === 0) {
-            void showAndLogErrorMessage(
-              `No databases found for language ${queryLanguage}. Please add a suitable database to your workspace.`,
-            );
-            return;
-          }
-        }
-        const quickPickItems = filteredDBs.map<DatabaseQuickPickItem>(
-          (dbItem) => ({
-            databaseItem: dbItem,
-            label: dbItem.name,
-            description: dbItem.language,
-          }),
-        );
-        /**
-         * Databases that were selected in the quick pick menu.
-         */
-        const quickpick = await window.showQuickPick<DatabaseQuickPickItem>(
-          quickPickItems,
-          { canPickMany: true, ignoreFocusOut: true },
-        );
-        if (quickpick !== undefined) {
-          // Collect all skipped databases and display them at the end (instead of popping up individual errors)
-          const skippedDatabases = [];
-          const errors = [];
-          for (const item of quickpick) {
-            try {
-              await compileAndRunQuery(
-                false,
-                uri,
-                progress,
-                token,
-                item.databaseItem,
-              );
-            } catch (e) {
-              skippedDatabases.push(item.label);
-              errors.push(getErrorMessage(e));
-            }
-          }
-          if (skippedDatabases.length > 0) {
-            void extLogger.log(`Errors:\n${errors.join("\n")}`);
-            void showAndLogWarningMessage(
-              `The following databases were skipped:\n${skippedDatabases.join(
-                "\n",
-              )}.\nFor details about the errors, see the logs.`,
-            );
-          }
-        } else {
-          void showAndLogErrorMessage("No databases selected.");
-        }
-      },
-      {
-        title: "Running query on selected databases",
-        cancellable: true,
-      },
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.runQueries",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        _: Uri | undefined,
-        multi: Uri[],
-      ) => {
-        const maxQueryCount = MAX_QUERIES.getValue() as number;
-        const [files, dirFound] = await gatherQlFiles(
-          multi.map((uri) => uri.fsPath),
-        );
-        if (files.length > maxQueryCount) {
-          throw new Error(
-            `You tried to run ${files.length} queries, but the maximum is ${maxQueryCount}. Try selecting fewer queries or changing the 'codeQL.runningQueries.maxQueries' setting.`,
-          );
-        }
-        // warn user and display selected files when a directory is selected because some ql
-        // files may be hidden from the user.
-        if (dirFound) {
-          const fileString = files.map((file) => basename(file)).join(", ");
-          const res = await showBinaryChoiceDialog(
-            `You are about to run ${files.length} queries: ${fileString} Do you want to continue?`,
-          );
-          if (!res) {
-            return;
-          }
-        }
-        const queryUris = files.map((path) => Uri.parse(`file:${path}`, true));
-
-        // Use a wrapped progress so that messages appear with the queries remaining in it.
-        let queriesRemaining = queryUris.length;
-        function wrappedProgress(update: ProgressUpdate) {
-          const message =
-            queriesRemaining > 1
-              ? `${queriesRemaining} remaining. ${update.message}`
-              : update.message;
-          progress({
-            ...update,
-            message,
-          });
-        }
-
-        wrappedProgress({
-          maxStep: queryUris.length,
-          step: queryUris.length - queriesRemaining,
-          message: "",
-        });
-
-        await Promise.all(
-          queryUris.map(async (uri) =>
-            compileAndRunQuery(
-              false,
-              uri,
-              wrappedProgress,
-              token,
-              undefined,
-            ).then(() => queriesRemaining--),
-          ),
-        );
-      },
-      {
-        title: "Running queries",
-        cancellable: true,
-      },
-
-      // Open the query server logger on error since that's usually where the interesting errors appear.
-      queryServerLogger,
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.quickEval",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        uri: Uri | undefined,
-      ) => await compileAndRunQuery(true, uri, progress, token, undefined),
-      {
-        title: "Running query",
-        cancellable: true,
-      },
-      // Open the query server logger on error since that's usually where the interesting errors appear.
-      queryServerLogger,
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.codeLensQuickEval",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        uri: Uri,
-        range: Range,
-      ) =>
-        await compileAndRunQuery(true, uri, progress, token, undefined, range),
-      {
-        title: "Running query",
-        cancellable: true,
-      },
-
-      // Open the query server logger on error since that's usually where the interesting errors appear.
-      queryServerLogger,
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.quickQuery",
-      async (progress: ProgressCallback, token: CancellationToken) =>
-        displayQuickQuery(ctx, cliServer, databaseUI, progress, token),
-      {
-        title: "Run Quick Query",
-      },
-
-      // Open the query server logger on error since that's usually where the interesting errors appear.
-      queryServerLogger,
-    ),
-  );
-
-  // The "runVariantAnalysis" command is internal-only.
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.runVariantAnalysis",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        uri: Uri | undefined,
-      ) => {
-        if (isCanary()) {
-          progress({
-            maxStep: 5,
-            step: 0,
-            message: "Getting credentials",
-          });
-
-          await variantAnalysisManager.runVariantAnalysis(
-            uri || window.activeTextEditor?.document.uri,
-            progress,
-            token,
-          );
-        } else {
-          throw new Error(
-            "Variant analysis requires the CodeQL Canary version to run.",
-          );
-        }
-      },
-      {
-        title: "Run Variant Analysis",
-        cancellable: true,
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.openVariantAnalysisLogs",
-      async (variantAnalysisId: number) => {
-        await variantAnalysisManager.openVariantAnalysisLogs(variantAnalysisId);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.copyVariantAnalysisRepoList",
-      async (
-        variantAnalysisId: number,
-        filterSort?: RepositoriesFilterSortStateWithIds,
-      ) => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysisId,
-          filterSort,
-        );
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.monitorVariantAnalysis",
-      async (variantAnalysis: VariantAnalysis, token: CancellationToken) => {
-        await variantAnalysisManager.monitorVariantAnalysis(
-          variantAnalysis,
-          token,
-        );
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.autoDownloadVariantAnalysisResult",
-      async (
-        scannedRepo: VariantAnalysisScannedRepository,
-        variantAnalysisSummary: VariantAnalysis,
-        token: CancellationToken,
-      ) => {
-        await variantAnalysisManager.enqueueDownload(
-          scannedRepo,
-          variantAnalysisSummary,
-          token,
-        );
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.cancelVariantAnalysis",
-      async (variantAnalysisId: number) => {
-        await variantAnalysisManager.cancelVariantAnalysis(variantAnalysisId);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.exportSelectedVariantAnalysisResults", async () => {
-      await exportSelectedVariantAnalysisResults(qhm);
-    }),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.exportVariantAnalysisResults",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        variantAnalysisId: number,
-        filterSort?: RepositoriesFilterSortStateWithIds,
-      ) => {
-        await exportVariantAnalysisResults(
-          variantAnalysisManager,
-          variantAnalysisId,
-          filterSort,
-          app.credentials,
-          progress,
-          token,
-        );
-      },
-      {
-        title: "Exporting variant analysis results",
-        cancellable: true,
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.loadVariantAnalysisRepoResults",
-      async (variantAnalysisId: number, repositoryFullName: string) => {
-        await variantAnalysisManager.loadResults(
-          variantAnalysisId,
-          repositoryFullName,
-        );
-      },
-    ),
-  );
-
-  // The "openVariantAnalysisView" command is internal-only.
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.openVariantAnalysisView",
-      async (variantAnalysisId: number) => {
-        await variantAnalysisManager.showView(variantAnalysisId);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.openVariantAnalysisQueryText",
-      async (variantAnalysisId: number) => {
-        await variantAnalysisManager.openQueryText(variantAnalysisId);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.openVariantAnalysisQueryFile",
-      async (variantAnalysisId: number) => {
-        await variantAnalysisManager.openQueryFile(variantAnalysisId);
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.openReferencedFile", openReferencedFile),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.previewQueryHelp", previewQueryHelp),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.restartQueryServer",
-      async (progress: ProgressCallback, token: CancellationToken) => {
-        // We restart the CLI server too, to ensure they are the same version
-        cliServer.restartCliServer();
-        await qs.restartQueryServer(progress, token);
-        void showAndLogInformationMessage("CodeQL Query Server restarted.", {
-          outputLogger: queryServerLogger,
-        });
-      },
-      {
-        title: "Restarting Query Server",
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.chooseDatabaseFolder",
-      (progress: ProgressCallback, token: CancellationToken) =>
-        databaseUI.handleChooseDatabaseFolder(progress, token),
-      {
-        title: "Choose a Database from a Folder",
-      },
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.chooseDatabaseArchive",
-      (progress: ProgressCallback, token: CancellationToken) =>
-        databaseUI.handleChooseDatabaseArchive(progress, token),
-      {
-        title: "Choose a Database from an Archive",
-      },
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.chooseDatabaseGithub",
-      async (progress: ProgressCallback, token: CancellationToken) => {
-        const credentials = isCanary() ? app.credentials : undefined;
-        await databaseUI.handleChooseDatabaseGithub(
-          credentials,
-          progress,
-          token,
-        );
-      },
-      {
-        title: "Adding database from GitHub",
-      },
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.chooseDatabaseInternet",
-      (progress: ProgressCallback, token: CancellationToken) =>
-        databaseUI.handleChooseDatabaseInternet(progress, token),
-
-      {
-        title: "Adding database from URL",
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.openDocumentation", async () =>
-      env.openExternal(Uri.parse("https://codeql.github.com/docs/")),
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.copyVersion", async () => {
-      const text = `CodeQL extension version: ${
-        extension?.packageJSON.version
-      } \nCodeQL CLI version: ${await getCliVersion()} \nPlatform: ${platform()} ${arch()}`;
-      await env.clipboard.writeText(text);
-      void showAndLogInformationMessage(text);
-    }),
-  );
-
-  const getCliVersion = async () => {
-    try {
-      return await cliServer.getVersion();
-    } catch {
-      return "<missing>";
-    }
-  };
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.authenticateToGitHub", async () => {
-      /**
-       * Credentials for authenticating to GitHub.
-       * These are used when making API calls.
-       */
-      const octokit = await app.credentials.getOctokit();
-      const userInfo = await octokit.users.getAuthenticated();
-      void showAndLogInformationMessage(
-        `Authenticated to GitHub as user: ${userInfo.data.login}`,
-      );
-    }),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.installPackDependencies",
-      async (progress: ProgressCallback) =>
-        await handleInstallPackDependencies(cliServer, progress),
-      {
-        title: "Installing pack dependencies",
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.downloadPacks",
-      async (progress: ProgressCallback) =>
-        await handleDownloadPacks(cliServer, progress),
-      {
-        title: "Downloading packs",
-      },
-    ),
-  );
-
-  ctx.subscriptions.push(
-    commandRunner("codeQL.showLogs", async () => {
-      extLogger.show();
-    }),
-  );
-
-  ctx.subscriptions.push(new SummaryLanguageSupport());
-
-  void extLogger.log("Starting language server.");
-  await client.start();
-  ctx.subscriptions.push({
-    dispose: () => {
-      void client.stop();
-    },
-  });
-  // Jump-to-definition and find-references
-  void extLogger.log("Registering jump-to-definition handlers.");
-
-  // Store contextual queries in a temporary folder so that they are removed
-  // when the application closes. There is no need for the user to interact with them.
-  const contextualQueryStorageDir = join(
-    tmpDir.name,
-    "contextual-query-storage",
-  );
-  await ensureDir(contextualQueryStorageDir);
-  languages.registerDefinitionProvider(
-    { scheme: zipArchiveScheme },
-    new TemplateQueryDefinitionProvider(
-      cliServer,
-      qs,
-      dbm,
-      contextualQueryStorageDir,
-    ),
-  );
-
-  languages.registerReferenceProvider(
-    { scheme: zipArchiveScheme },
-    new TemplateQueryReferenceProvider(
-      cliServer,
-      qs,
-      dbm,
-      contextualQueryStorageDir,
-    ),
-  );
+  const testUiCommands = testManager?.getCommands() ?? {};
 
   const astViewer = new AstViewer();
-  const printAstTemplateProvider = new TemplatePrintAstProvider(
+  const astTemplateProvider = new TemplatePrintAstProvider(
     cliServer,
     qs,
     dbm,
@@ -1429,91 +1037,118 @@ async function activateWithInstalledDistribution(
   const cfgTemplateProvider = new TemplatePrintCfgProvider(cliServer, dbm);
 
   ctx.subscriptions.push(astViewer);
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.viewAst",
-      async (
-        progress: ProgressCallback,
-        token: CancellationToken,
-        selectedFile: Uri,
-      ) => {
-        const ast = await printAstTemplateProvider.provideAst(
-          progress,
-          token,
-          selectedFile ?? window.activeTextEditor?.document.uri,
-        );
-        if (ast) {
-          astViewer.updateRoots(await ast.getRoots(), ast.db, ast.fileName);
-        }
-      },
-      {
-        cancellable: true,
-        title: "Calculate AST",
-      },
-    ),
-  );
 
-  ctx.subscriptions.push(
-    commandRunnerWithProgress(
-      "codeQL.viewCfg",
-      async (progress: ProgressCallback, token: CancellationToken) => {
-        const res = await cfgTemplateProvider.provideCfgUri(
-          window.activeTextEditor?.document,
-        );
-        if (res) {
-          await compileAndRunQuery(false, res[0], progress, token, undefined);
-        }
-      },
-      {
-        title: "Calculating Control Flow Graph",
-        cancellable: true,
-      },
-    ),
-  );
+  const summaryLanguageSupport = new SummaryLanguageSupport(app);
+  ctx.subscriptions.push(summaryLanguageSupport);
 
-  const mockServer = new VSCodeMockGitHubApiServer(ctx);
+  const mockServer = new VSCodeMockGitHubApiServer(app);
   ctx.subscriptions.push(mockServer);
+
+  void extLogger.log("Registering top-level command palette commands.");
+
+  const allCommands: AllExtensionCommands = {
+    ...getCommands(app, cliServer, qs, languageClient),
+    ...getQueryEditorCommands({
+      commandManager: app.commands,
+      queryRunner: qs,
+      cliServer,
+      qhelpTmpDir: qhelpTmpDir.name,
+    }),
+    ...localQueryResultsView.getCommands(),
+    ...qhm.getCommands(),
+    ...variantAnalysisManager.getCommands(),
+    ...databaseUI.getCommands(),
+    ...dbModule.getCommands(),
+    ...getAstCfgCommands({
+      localQueries,
+      astViewer,
+      astTemplateProvider,
+      cfgTemplateProvider,
+    }),
+    ...astViewer.getCommands(),
+    ...getPackagingCommands({
+      cliServer,
+    }),
+    ...languageSelectionPanel.getCommands(),
+    ...modelEditorModule.getCommands(),
+    ...evalLogViewer.getCommands(),
+    ...summaryLanguageSupport.getCommands(),
+    ...testUiCommands,
+    ...mockServer.getCommands(),
+    ...debuggerUI.getCommands(),
+  };
+
+  for (const [commandName, command] of Object.entries(allCommands)) {
+    app.commands.register(commandName as keyof AllExtensionCommands, command);
+  }
+
+  const queryServerCommands: QueryServerCommands = {
+    ...localQueries.getCommands(),
+  };
+
+  for (const [commandName, command] of Object.entries(queryServerCommands)) {
+    app.queryServerCommands.register(
+      commandName as keyof QueryServerCommands,
+      command,
+    );
+  }
+
+  void extLogger.log("Starting language server.");
+  await languageClient.start();
+  ctx.subscriptions.push({
+    dispose: () => {
+      void languageClient.stop();
+    },
+  });
+
+  // Handle visibility changes in the CodeQL language client.
+  Window.onDidChangeVisibleTextEditors((editors) => {
+    languageClient.notifyVisibilityChange(editors);
+  });
+  // Send an inital notification to the language server
+  // to set the initial state of the visible editors.
+  languageClient.notifyVisibilityChange(Window.visibleTextEditors);
+
+  // Jump-to-definition and find-references
+  void extLogger.log("Registering jump-to-definition handlers.");
+
   ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.mockGitHubApiServer.startRecording",
-      async () => await mockServer.startRecording(),
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.mockGitHubApiServer.saveScenario",
-      async () => await mockServer.saveScenario(),
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.mockGitHubApiServer.cancelRecording",
-      async () => await mockServer.cancelRecording(),
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.mockGitHubApiServer.loadScenario",
-      async () => await mockServer.loadScenario(),
-    ),
-  );
-  ctx.subscriptions.push(
-    commandRunner(
-      "codeQL.mockGitHubApiServer.unloadScenario",
-      async () => await mockServer.unloadScenario(),
+    languages.registerDefinitionProvider(
+      { scheme: zipArchiveScheme },
+      new TemplateQueryDefinitionProvider(
+        cliServer,
+        qs,
+        dbm,
+        contextualQueryStorageDir,
+      ),
     ),
   );
 
-  await commands.executeCommand("codeQLDatabases.removeOrphanedDatabases");
+  ctx.subscriptions.push(
+    languages.registerReferenceProvider(
+      { scheme: zipArchiveScheme },
+      new TemplateQueryReferenceProvider(
+        cliServer,
+        qs,
+        dbm,
+        contextualQueryStorageDir,
+      ),
+    ),
+  );
+
+  await app.commands.execute("codeQLDatabases.removeOrphanedDatabases");
 
   void extLogger.log("Reading query history");
   await qhm.readQueryHistory();
+
+  distributionManager.startCleanup();
 
   void extLogger.log("Successfully finished extension initialization.");
 
   return {
     ctx,
     cliServer,
+    localQueries,
     qs,
     distributionManager,
     databaseManager: dbm,
@@ -1525,7 +1160,122 @@ async function activateWithInstalledDistribution(
   };
 }
 
+/**
+ * Handle changes to the external config file. This is used to restart the query server
+ * when the user changes options.
+ * See https://docs.github.com/en/code-security/codeql-cli/using-the-codeql-cli/specifying-command-options-in-a-codeql-configuration-file#using-a-codeql-configuration-file
+ */
+function watchExternalConfigFile(app: ExtensionApp, ctx: ExtensionContext) {
+  const home = homedir();
+  if (home) {
+    const configPath = join(home, ".config", "codeql", "config");
+    const configWatcher = watch(configPath, {
+      // These options avoid firing the event twice.
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: true,
+    });
+    configWatcher.on("all", async () => {
+      await app.commands.execute(
+        "codeQL.restartQueryServerOnExternalConfigChange",
+      );
+    });
+    ctx.subscriptions.push({
+      dispose: () => {
+        void configWatcher.close();
+      },
+    });
+  }
+}
+
+async function showResultsForComparison(
+  compareView: CompareView,
+  from: CompletedLocalQueryInfo,
+  to: CompletedLocalQueryInfo,
+): Promise<void> {
+  try {
+    await compareView.showResults(from, to);
+  } catch (e) {
+    void showAndLogExceptionWithTelemetry(
+      extLogger,
+      telemetryListener,
+      redactableError(asError(e))`Failed to show results: ${getErrorMessage(
+        e,
+      )}`,
+    );
+  }
+}
+
+async function showPerformanceComparison(
+  view: ComparePerformanceView,
+  from: CompletedLocalQueryInfo,
+  to: CompletedLocalQueryInfo | undefined,
+): Promise<void> {
+  let fromLog = from.evaluatorLogPaths?.jsonSummary;
+  let toLog = to?.evaluatorLogPaths?.jsonSummary;
+
+  if (to === undefined) {
+    toLog = fromLog;
+    fromLog = "";
+  }
+  if (fromLog === undefined || toLog === undefined) {
+    return extLogger.showWarningMessage(
+      `Cannot compare performance as the structured logs are missing. Did they queries complete normally?`,
+    );
+  }
+  await extLogger.log(
+    `Comparing performance of ${from.getQueryName()} and ${to?.getQueryName() ?? "baseline"}`,
+  );
+
+  await view.showResults(fromLog, toLog);
+}
+
+function addUnhandledRejectionListener() {
+  const handler = (error: unknown) => {
+    // This listener will be triggered for errors from other extensions as
+    // well as errors from this extension. We don't want to flood the user
+    // with popups about errors from other extensions, and we don't want to
+    // report them in our telemetry.
+    //
+    // The stack trace gets redacted before being sent as telemetry, but at
+    // this point in the code we have the full unredacted information.
+    const isFromThisExtension =
+      extension && getErrorStack(error).includes(extension.extensionPath);
+
+    if (isFromThisExtension) {
+      const message = redactableError(
+        asError(error),
+      )`Unhandled error: ${getErrorMessage(error)}`;
+      const fullMessage = message.fullMessageWithStack;
+
+      // Add a catch so that showAndLogExceptionWithTelemetry fails, we avoid
+      // triggering "unhandledRejection" and avoid an infinite loop
+      showAndLogExceptionWithTelemetry(extLogger, telemetryListener, message, {
+        fullMessage,
+      }).catch((telemetryError: unknown) => {
+        void extLogger.log(
+          `Failed to send error telemetry: ${getErrorMessage(telemetryError)}`,
+        );
+        void extLogger.log(message.fullMessage);
+      });
+    }
+  };
+
+  // "uncaughtException" will trigger whenever an exception reaches the top level.
+  // This covers extension initialization and any code within a `setTimeout`.
+  // Notably this does not include exceptions thrown when executing commands,
+  // because `registerCommandWithErrorHandling` wraps the command body and
+  // handles errors.
+  process.addListener("uncaughtException", handler);
+
+  // "unhandledRejection" will trigger whenever any promise is rejected and it is
+  // not handled by a "catch" somewhere in the promise chain. This includes when
+  // a promise is used with the "void" operator.
+  process.addListener("unhandledRejection", handler);
+}
+
 async function createQueryServer(
+  app: ExtensionApp,
   qlConfigurationListener: QueryServerConfigListener,
   cliServer: CodeQLCliServer,
   ctx: ExtensionContext,
@@ -1544,27 +1294,17 @@ async function createQueryServer(
       { title: "CodeQL query server", location: ProgressLocation.Window },
       task,
     );
-  if (await cliServer.cliConstraints.supportsNewQueryServer()) {
-    const qs = new QueryServerClient(
-      qlConfigurationListener,
-      cliServer,
-      qsOpts,
-      progressCallback,
-    );
-    ctx.subscriptions.push(qs);
-    await qs.startQueryServer();
-    return new NewQueryRunner(qs);
-  } else {
-    const qs = new LegacyQueryServerClient(
-      qlConfigurationListener,
-      cliServer,
-      qsOpts,
-      progressCallback,
-    );
-    ctx.subscriptions.push(qs);
-    await qs.startQueryServer();
-    return new LegacyQueryRunner(qs);
-  }
+
+  const qs = new QueryServerClient(
+    app,
+    qlConfigurationListener,
+    cliServer,
+    qsOpts,
+    progressCallback,
+  );
+  ctx.subscriptions.push(qs);
+  await qs.startQueryServer();
+  return new QueryRunner(qs);
 }
 
 function getContextStoragePath(ctx: ExtensionContext) {
@@ -1574,10 +1314,11 @@ function getContextStoragePath(ctx: ExtensionContext) {
 async function initializeLogging(ctx: ExtensionContext): Promise<void> {
   ctx.subscriptions.push(extLogger);
   ctx.subscriptions.push(queryServerLogger);
-  ctx.subscriptions.push(ideServerLogger);
+  ctx.subscriptions.push(languageServerLogger);
 }
 
-const checkForUpdatesCommand = "codeQL.checkForUpdatesToCLI";
+const checkForUpdatesCommand: keyof PreActivationCommands =
+  "codeQL.checkForUpdatesToCLI" as const;
 
 const avoidVersionCheck = "avoid-version-check-at-startup";
 const lastVersionChecked = "last-version-checked";
@@ -1604,6 +1345,7 @@ async function assertVSCodeVersionGreaterThan(
     const parsedMinVersion = parse(minVersion);
     if (!parsedVersion || !parsedMinVersion) {
       void showAndLogWarningMessage(
+        extLogger,
         `Could not do a version check of vscode because could not parse version number: actual vscode version ${vscodeVersion} or minimum supported vscode version ${minVersion}.`,
       );
       return;
@@ -1623,6 +1365,7 @@ async function assertVSCodeVersionGreaterThan(
     }
   } catch (e) {
     void showAndLogWarningMessage(
+      extLogger,
       `Could not do a version check because of an error: ${getErrorMessage(e)}`,
     );
   }

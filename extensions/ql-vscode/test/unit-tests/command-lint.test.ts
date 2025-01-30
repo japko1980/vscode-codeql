@@ -7,10 +7,15 @@ type CmdDecl = {
   title?: string;
 };
 
+type DebuggerDecl = {
+  variables?: Record<string, string>;
+};
+
 describe("commands declared in package.json", () => {
   const manifest = readJsonSync(join(__dirname, "../../package.json"));
   const commands = manifest.contributes.commands;
   const menus = manifest.contributes.menus;
+  const debuggers = manifest.contributes.debuggers;
 
   const disabledInPalette: Set<string> = new Set<string>();
 
@@ -33,18 +38,22 @@ describe("commands declared in package.json", () => {
       expect(title).toBeDefined();
       commandTitles[command] = title!;
     } else if (
+      command.match(/^codeQLLanguageSelection\./) ||
       command.match(/^codeQLDatabases\./) ||
+      command.match(/^codeQLQueries\./) ||
+      command.match(/^codeQLQuickQuery\./) ||
       command.match(/^codeQLVariantAnalysisRepositories\./) ||
       command.match(/^codeQLQueryHistory\./) ||
       command.match(/^codeQLAstViewer\./) ||
       command.match(/^codeQLEvalLogViewer\./) ||
-      command.match(/^codeQLTests\./)
+      command.match(/^codeQLTests\./) ||
+      command.match(/^codeQLModelEditor\./)
     ) {
       scopedCmds.add(command);
       expect(title).toBeDefined();
       commandTitles[command] = title!;
     } else {
-      fail(`Unexpected command name ${command}`);
+      throw new Error(`Unexpected command name ${command}`);
     }
   });
 
@@ -60,9 +69,25 @@ describe("commands declared in package.json", () => {
     contribContextMenuCmds.add(command);
   });
 
+  menus["editor/title"].forEach((commandDecl: CmdDecl) => {
+    const { command } = commandDecl;
+    paletteCmds.delete(command);
+    contribContextMenuCmds.add(command);
+  });
+
+  debuggers.forEach((debuggerDecl: DebuggerDecl) => {
+    if (debuggerDecl.variables !== undefined) {
+      for (const command of Object.values(debuggerDecl.variables)) {
+        // Commands used as debug configuration variables need not be enabled in the command palette.
+        paletteCmds.delete(command);
+      }
+    }
+  });
+
   menus.commandPalette.forEach((commandDecl: CmdDecl) => {
-    if (commandDecl.when === "false")
+    if (commandDecl.when === "false") {
       disabledInPalette.add(commandDecl.command);
+    }
   });
 
   it("should have commands appropriately prefixed", () => {
@@ -85,10 +110,13 @@ describe("commands declared in package.json", () => {
   it("should have the right commands accessible from the command palette", () => {
     paletteCmds.forEach((command) => {
       // command ${command} should be enabled in the command palette
+      if (disabledInPalette.has(command) !== false) {
+        expect(command).toBe("enabled");
+      }
       expect(disabledInPalette.has(command)).toBe(false);
     });
 
-    // Commands in contribContextMenuCmds may reasonbly be enabled or
+    // Commands in contribContextMenuCmds may reasonably be enabled or
     // disabled in the command palette; for example, codeQL.runQuery
     // is available there, since we heuristically figure out which
     // query to run, but codeQL.setCurrentDatabase is not.

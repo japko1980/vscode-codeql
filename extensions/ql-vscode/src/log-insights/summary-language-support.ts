@@ -1,21 +1,24 @@
 import { readFile } from "fs-extra";
-import { RawSourceMap, SourceMapConsumer } from "source-map";
-import {
-  commands,
-  Position,
-  Selection,
+import type { RawSourceMap } from "source-map";
+import { SourceMapConsumer } from "source-map";
+import type {
   TextDocument,
   TextEditor,
-  TextEditorRevealType,
   TextEditorSelectionChangeEvent,
+} from "vscode";
+import {
+  Position,
+  Selection,
+  TextEditorRevealType,
   ViewColumn,
   window,
   workspace,
 } from "vscode";
-import { DisposableObject } from "../pure/disposable-object";
-import { commandRunner } from "../commandRunner";
-import { extLogger } from "../common";
-import { getErrorMessage } from "../pure/helpers-pure";
+import { DisposableObject } from "../common/disposable-object";
+import { extLogger } from "../common/logging/vscode";
+import { getErrorMessage } from "../common/helpers-pure";
+import type { SummaryLanguageSupportCommands } from "../common/commands";
+import type { App } from "../common/app";
 
 /** A `Position` within a specified file on disk. */
 interface PositionInFile {
@@ -55,7 +58,7 @@ export class SummaryLanguageSupport extends DisposableObject {
    */
   private sourceMap: SourceMapConsumer | undefined = undefined;
 
-  constructor() {
+  constructor(private readonly app: App) {
     super();
 
     this.push(
@@ -73,8 +76,13 @@ export class SummaryLanguageSupport extends DisposableObject {
         this.handleDidCloseTextDocument.bind(this),
       ),
     );
+  }
 
-    this.push(commandRunner("codeQL.gotoQL", this.handleGotoQL.bind(this)));
+  public getCommands(): SummaryLanguageSupportCommands {
+    return {
+      "codeQL.gotoQL": this.handleGotoQL.bind(this),
+      "codeQL.gotoQLContextEditor": this.handleGotoQL.bind(this),
+    };
   }
 
   /**
@@ -156,7 +164,7 @@ export class SummaryLanguageSupport extends DisposableObject {
   private async updateContext(): Promise<void> {
     const position = await this.getQLSourceLocation();
 
-    await commands.executeCommand(
+    await this.app.commands.execute(
       "setContext",
       "codeql.hasQLSource",
       position !== undefined,

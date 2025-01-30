@@ -1,5 +1,5 @@
 import { faker } from "@faker-js/faker";
-import {
+import type {
   VariantAnalysisNotFoundRepositoryGroup,
   VariantAnalysisSkippedRepositories,
   VariantAnalysisSkippedRepositoryGroup,
@@ -15,7 +15,7 @@ export function createMockSkippedRepos(): VariantAnalysisSkippedRepositories {
   };
 }
 
-export function createMockSkippedRepoGroup(): VariantAnalysisSkippedRepositoryGroup {
+function createMockSkippedRepoGroup(): VariantAnalysisSkippedRepositoryGroup {
   return {
     repository_count: 2,
     repositories: [
@@ -25,9 +25,9 @@ export function createMockSkippedRepoGroup(): VariantAnalysisSkippedRepositoryGr
   };
 }
 
-export function createMockNotFoundSkippedRepoGroup(): VariantAnalysisNotFoundRepositoryGroup {
-  const repoName1 = `github/${faker.random.word()}`;
-  const repoName2 = `github/${faker.random.word()}`;
+function createMockNotFoundSkippedRepoGroup(): VariantAnalysisNotFoundRepositoryGroup {
+  const repoName1 = `github/${faker.word.sample()}`;
+  const repoName2 = `github/${faker.word.sample()}`;
 
   return {
     repository_count: 2,

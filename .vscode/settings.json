@@ -42,22 +42,53 @@
     "LANG": "en-US",
     "TZ": "UTC"
   },
+
+  // These custom rules are read in extensions/ql-vscode/.markdownlint-cli2.cjs
+  // but markdownlint only considers that config when linting files in
+  // extensions/ql-vscode/ or its subfolders. Therefore, we have to explicitly
+  // load the custom rules here too.
+  "markdownlint.customRules": [
+    "./extensions/ql-vscode/node_modules/@github/markdownlint-github/src/rules/no-default-alt-text.js",
+    "./extensions/ql-vscode/node_modules/@github/markdownlint-github/src/rules/no-generic-link-text.js"
+  ],
+
+  // This ensures that the accessibility rule enablement done by github-markdownlint is
+  // considered by the extension too.
+  //
+  // Unfortunately, we can only specify a single extends, so the config here isn't
+  // identical since it can't also consider @github/markdownlint-github/style/base.json
+  // That's not as bad as it could be since the full config is considered for anything
+  // in extensions/ql-vscode/ or its subfolders anyway.
+  //
+  // Additional nonfiguration of the default rules is done in .markdownlint.json,
+  // which is picked up by the extension automatically, and read explicitly in
+  // .markdownlint-cli2.cjs
+  "markdownlint.config": {
+    "extends": "./extensions/ql-vscode/node_modules/@github/markdownlint-github/style/accessibility.json"
+  },
+
+  // These options are used by the `jestrunner.debug` command.
+  // They are not used by the `jestrunner.run` command.
+  // After clicking "debug" over a test, continually invoke the
+  // "Debug: Attach to Node Process" command until you see a
+  // process named "Code Helper (Plugin)". Then click "attach".
+  // This will attach the debugger to the test process.
   "jestrunner.debugOptions": {
     // Uncomment to debug integration tests
-    // "attachSimplePort": 9223,
+    "attachSimplePort": 9223,
     "env": {
       "LANG": "en-US",
       "TZ": "UTC",
 
       // Uncomment to set a custom path to a CodeQL checkout.
-      // "TEST_CODEQL_PATH": "../codeql",
+      // "TEST_CODEQL_PATH": "/absolute/path/to/checkout/of/codeql",
 
       // Uncomment to set a custom path to a CodeQL CLI executable.
       // This is the CodeQL version that will be used in the tests.
-      // "CLI_PATH": "/path/to/customg/codeql",
+      // "CLI_PATH": "/absolute/path/to/custom/codeql",
 
       // Uncomment to debug integration tests
-      // "VSCODE_WAIT_FOR_DEBUGGER": "true",
+      "VSCODE_WAIT_FOR_DEBUGGER": "true",
     }
   },
   "terminal.integrated.env.linux": {

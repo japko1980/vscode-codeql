@@ -1,14 +1,20 @@
-import { DisposableObject } from "./pure/disposable-object";
-import {
-  workspace,
-  Event,
-  EventEmitter,
+import { DisposableObject } from "./common/disposable-object";
+import type {
   ConfigurationChangeEvent,
-  ConfigurationTarget,
+  ConfigurationScope,
+  Event,
 } from "vscode";
-import { DistributionManager } from "./distribution";
-import { extLogger } from "./common";
-import { ONE_DAY_IN_MS } from "./pure/time";
+import { ConfigurationTarget, EventEmitter, workspace, Uri } from "vscode";
+import type { DistributionManager } from "./codeql-cli/distribution";
+import { extLogger } from "./common/logging/vscode";
+import { ONE_DAY_IN_MS } from "./common/time";
+import {
+  defaultFilterSortState,
+  FilterKey,
+  SortKey,
+} from "./variant-analysis/shared/variant-analysis-filter-sort";
+import { substituteConfigVariables } from "./common/config-template";
+import { getErrorMessage } from "./common/helpers-pure";
 
 export const ALL_SETTINGS: Setting[] = [];
 
@@ -39,12 +45,12 @@ export class Setting {
     }
   }
 
-  getValue<T>(): T {
+  getValue<T>(scope?: ConfigurationScope | null): T {
     if (this.parent === undefined) {
       throw new Error("Cannot get the value of a root setting.");
     }
     return workspace
-      .getConfiguration(this.parent.qualifiedName)
+      .getConfiguration(this.parent.qualifiedName, scope)
       .get<T>(this.name)!;
   }
 
@@ -58,34 +64,113 @@ export class Setting {
   }
 }
 
-export interface InspectionResult<T> {
-  globalValue?: T;
-  workspaceValue?: T;
-  workspaceFolderValue?: T;
+const VSCODE_DEBUG_SETTING = new Setting("debug", undefined);
+export const VSCODE_SAVE_BEFORE_START_SETTING = new Setting(
+  "saveBeforeStart",
+  VSCODE_DEBUG_SETTING,
+);
+
+const VSCODE_GITHUB_ENTERPRISE_SETTING = new Setting(
+  "github-enterprise",
+  undefined,
+);
+export const VSCODE_GITHUB_ENTERPRISE_URI_SETTING = new Setting(
+  "uri",
+  VSCODE_GITHUB_ENTERPRISE_SETTING,
+);
+
+/**
+ * Get the value of the `github-enterprise.uri` setting, parsed as a URI.
+ * If the value is not set or cannot be parsed, return `undefined`.
+ */
+export function getEnterpriseUri(): Uri | undefined {
+  const config = VSCODE_GITHUB_ENTERPRISE_URI_SETTING.getValue<string>();
+  if (config) {
+    try {
+      let uri = Uri.parse(config, true);
+      if (uri.scheme === "http") {
+        uri = uri.with({ scheme: "https" });
+      }
+      return uri;
+    } catch (e) {
+      void extLogger.log(
+        `Failed to parse the GitHub Enterprise URI: ${getErrorMessage(e)}`,
+      );
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Is the GitHub Enterprise URI set?
+ */
+export function hasEnterpriseUri(): boolean {
+  return getEnterpriseUri() !== undefined;
+}
+
+/**
+ * Does the uri look like GHEC-DR?
+ */
+function isGhecDrUri(uri: Uri | undefined): boolean {
+  return uri !== undefined && uri.authority.toLowerCase().endsWith(".ghe.com");
+}
+
+/**
+ * Is the GitHub Enterprise URI set to something that looks like GHEC-DR?
+ */
+export function hasGhecDrUri(): boolean {
+  const uri = getEnterpriseUri();
+  return isGhecDrUri(uri);
+}
+
+/**
+ * The URI for GitHub.com.
+ */
+export const GITHUB_URL = new URL("https://github.com");
+export const GITHUB_API_URL = new URL("https://api.github.com");
+
+/**
+ * If the GitHub Enterprise URI is set to something that looks like GHEC-DR, return it.
+ */
+export function getGhecDrUri(): Uri | undefined {
+  const uri = getEnterpriseUri();
+  if (isGhecDrUri(uri)) {
+    return uri;
+  } else {
+    return undefined;
+  }
+}
+
+export function getGitHubInstanceUrl(): URL {
+  const ghecDrUri = getGhecDrUri();
+  if (ghecDrUri) {
+    return new URL(ghecDrUri.toString());
+  }
+  return GITHUB_URL;
+}
+
+export function getGitHubInstanceApiUrl(): URL {
+  const ghecDrUri = getGhecDrUri();
+  if (ghecDrUri) {
+    const url = new URL(ghecDrUri.toString());
+    url.hostname = `api.${url.hostname}`;
+    return url;
+  }
+  return GITHUB_API_URL;
 }
 
 const ROOT_SETTING = new Setting("codeQL");
 
-// Global configuration
+// Telemetry configuration
 const TELEMETRY_SETTING = new Setting("telemetry", ROOT_SETTING);
-const AST_VIEWER_SETTING = new Setting("astViewer", ROOT_SETTING);
-const GLOBAL_TELEMETRY_SETTING = new Setting("telemetry");
-const LOG_INSIGHTS_SETTING = new Setting("logInsights", ROOT_SETTING);
 
 export const LOG_TELEMETRY = new Setting("logTelemetry", TELEMETRY_SETTING);
+
+// Legacy setting that is no longer used, but is used for showing a message when the user upgrades.
 export const ENABLE_TELEMETRY = new Setting(
   "enableTelemetry",
   TELEMETRY_SETTING,
 );
-
-export const GLOBAL_ENABLE_TELEMETRY = new Setting(
-  "enableTelemetry",
-  GLOBAL_TELEMETRY_SETTING,
-);
-
-export function newTelemetryEnabled(): boolean {
-  return true;
-}
 
 // Distribution configuration
 const DISTRIBUTION_SETTING = new Setting("cli", ROOT_SETTING);
@@ -101,6 +186,11 @@ const PERSONAL_ACCESS_TOKEN_SETTING = new Setting(
   "personalAccessToken",
   DISTRIBUTION_SETTING,
 );
+const CLI_DOWNLOAD_TIMEOUT_SETTING = new Setting(
+  "downloadTimeout",
+  DISTRIBUTION_SETTING,
+);
+const CLI_CHANNEL_SETTING = new Setting("channel", DISTRIBUTION_SETTING);
 
 // Query History configuration
 const QUERY_HISTORY_SETTING = new Setting("queryHistory", ROOT_SETTING);
@@ -115,15 +205,18 @@ const DISTRIBUTION_CHANGE_SETTINGS = [
   CUSTOM_CODEQL_PATH_SETTING,
   INCLUDE_PRERELEASE_SETTING,
   PERSONAL_ACCESS_TOKEN_SETTING,
+  CLI_CHANNEL_SETTING,
 ];
+
+export type CLIChannel = "stable" | "nightly";
 
 export interface DistributionConfig {
   readonly customCodeQlPath?: string;
   updateCustomCodeQlPath: (newPath: string | undefined) => Promise<void>;
   includePrerelease: boolean;
   personalAccessToken?: string;
-  ownerName?: string;
-  repositoryName?: string;
+  downloadTimeout: number;
+  channel: CLIChannel;
   onDidChangeConfiguration?: Event<void>;
 }
 
@@ -141,6 +234,10 @@ const DEBUG_SETTING = new Setting("debug", RUNNING_QUERIES_SETTING);
 const MAX_PATHS = new Setting("maxPaths", RUNNING_QUERIES_SETTING);
 const RUNNING_TESTS_SETTING = new Setting("runningTests", ROOT_SETTING);
 const RESULTS_DISPLAY_SETTING = new Setting("resultsDisplay", ROOT_SETTING);
+const USE_EXTENSION_PACKS = new Setting(
+  "useExtensionPacks",
+  RUNNING_QUERIES_SETTING,
+);
 
 export const ADDITIONAL_TEST_ARGUMENTS_SETTING = new Setting(
   "additionalTestArguments",
@@ -151,10 +248,6 @@ export const NUMBER_OF_TEST_THREADS_SETTING = new Setting(
   RUNNING_TESTS_SETTING,
 );
 export const MAX_QUERIES = new Setting("maxQueries", RUNNING_QUERIES_SETTING);
-export const AUTOSAVE_SETTING = new Setting(
-  "autoSave",
-  RUNNING_QUERIES_SETTING,
-);
 export const PAGE_SIZE = new Setting("pageSize", RESULTS_DISPLAY_SETTING);
 const CUSTOM_LOG_DIRECTORY_SETTING = new Setting(
   "customLogDirectory",
@@ -200,6 +293,7 @@ const CLI_SETTINGS = [
   NUMBER_OF_TEST_THREADS_SETTING,
   NUMBER_OF_THREADS_SETTING,
   MAX_PATHS,
+  USE_EXTENSION_PACKS,
 ];
 
 export interface CliConfig {
@@ -207,7 +301,9 @@ export interface CliConfig {
   numberTestThreads: number;
   numberThreads: number;
   maxPaths: number;
+  useExtensionPacks: boolean;
   onDidChangeConfiguration?: Event<void>;
+  setUseExtensionPacks: (useExtensionPacks: boolean) => Promise<void>;
 }
 
 export abstract class ConfigListener extends DisposableObject {
@@ -260,7 +356,10 @@ export class DistributionConfigListener
   implements DistributionConfig
 {
   public get customCodeQlPath(): string | undefined {
-    return CUSTOM_CODEQL_PATH_SETTING.getValue() || undefined;
+    const testCliPath =
+      isIntegrationTestMode() &&
+      process.env.VSCODE_CODEQL_TESTING_CODEQL_CLI_TEST_PATH;
+    return CUSTOM_CODEQL_PATH_SETTING.getValue() || testCliPath || undefined;
   }
 
   public get includePrerelease(): boolean {
@@ -271,11 +370,19 @@ export class DistributionConfigListener
     return PERSONAL_ACCESS_TOKEN_SETTING.getValue() || undefined;
   }
 
+  public get downloadTimeout(): number {
+    return CLI_DOWNLOAD_TIMEOUT_SETTING.getValue() || 10;
+  }
+
   public async updateCustomCodeQlPath(newPath: string | undefined) {
     await CUSTOM_CODEQL_PATH_SETTING.updateValue(
       newPath,
       ConfigurationTarget.Global,
     );
+  }
+
+  public get channel(): CLIChannel {
+    return CLI_CHANNEL_SETTING.getValue() === "nightly" ? "nightly" : "stable";
   }
 
   protected handleDidChangeConfiguration(e: ConfigurationChangeEvent): void {
@@ -404,6 +511,19 @@ export class CliConfigListener extends ConfigListener implements CliConfig {
     return MAX_PATHS.getValue<number>();
   }
 
+  public get useExtensionPacks(): boolean {
+    // currently, we are restricting the values of this setting to 'all' or 'none'.
+    return USE_EXTENSION_PACKS.getValue() === "all";
+  }
+
+  // Exposed for testing only
+  public async setUseExtensionPacks(newUseExtensionPacks: boolean) {
+    await USE_EXTENSION_PACKS.updateValue(
+      newUseExtensionPacks ? "all" : "none",
+      ConfigurationTarget.Global,
+    );
+  }
+
   protected handleDidChangeConfiguration(e: ConfigurationChangeEvent): void {
     this.handleDidChangeConfigurationForRelevantSettings(CLI_SETTINGS, e);
   }
@@ -439,20 +559,7 @@ export function isCanary() {
   return !!CANARY_FEATURES.getValue<boolean>();
 }
 
-/**
- * Enables the experimental query server
- */
-export const CANARY_QUERY_SERVER = new Setting(
-  "canaryQueryServer",
-  ROOT_SETTING,
-);
-
-// The default value for this setting is now `true`
-export function allowCanaryQueryServer() {
-  const value = CANARY_QUERY_SERVER.getValue<boolean>();
-  return value === undefined ? true : !!value;
-}
-
+const LOG_INSIGHTS_SETTING = new Setting("logInsights", ROOT_SETTING);
 export const JOIN_ORDER_WARNING_THRESHOLD = new Setting(
   "joinOrderWarningThreshold",
   LOG_INSIGHTS_SETTING,
@@ -462,12 +569,25 @@ export function joinOrderWarningThreshold(): number {
   return JOIN_ORDER_WARNING_THRESHOLD.getValue<number>();
 }
 
+const AST_VIEWER_SETTING = new Setting("astViewer", ROOT_SETTING);
 /**
- * Avoids caching in the AST viewer if the user is also a canary user.
+ * Hidden setting: Avoids caching in the AST viewer if the user is also a canary user.
  */
 export const NO_CACHE_AST_VIEWER = new Setting(
   "disableCache",
   AST_VIEWER_SETTING,
+);
+
+const CONTEXTUAL_QUERIES_SETTINGS = new Setting(
+  "contextualQueries",
+  ROOT_SETTING,
+);
+/**
+ * Hidden setting: Avoids caching in jump to def and find refs contextual queries if the user is also a canary user.
+ */
+export const NO_CACHE_CONTEXTUAL_QUERIES = new Setting(
+  "disableCache",
+  CONTEXTUAL_QUERIES_SETTINGS,
 );
 
 // Settings for variant analysis
@@ -494,6 +614,12 @@ export async function setRemoteControllerRepo(repo: string | undefined) {
 
 export interface VariantAnalysisConfig {
   controllerRepo: string | undefined;
+  showSystemDefinedRepositoryLists: boolean;
+  /**
+   * This uses a URL instead of a URI because the URL class is available in
+   * unit tests and is fully browser-compatible.
+   */
+  githubUrl: URL;
   onDidChangeConfiguration?: Event<void>;
 }
 
@@ -503,13 +629,49 @@ export class VariantAnalysisConfigListener
 {
   protected handleDidChangeConfiguration(e: ConfigurationChangeEvent): void {
     this.handleDidChangeConfigurationForRelevantSettings(
-      [VARIANT_ANALYSIS_SETTING],
+      [VARIANT_ANALYSIS_SETTING, VSCODE_GITHUB_ENTERPRISE_URI_SETTING],
       e,
     );
   }
 
   public get controllerRepo(): string | undefined {
     return getRemoteControllerRepo();
+  }
+
+  public get showSystemDefinedRepositoryLists(): boolean {
+    return !hasEnterpriseUri();
+  }
+
+  public get githubUrl(): URL {
+    return getGitHubInstanceUrl();
+  }
+}
+
+const VARIANT_ANALYSIS_FILTER_RESULTS = new Setting(
+  "defaultResultsFilter",
+  VARIANT_ANALYSIS_SETTING,
+);
+
+export function getVariantAnalysisDefaultResultsFilter(): FilterKey {
+  const value = VARIANT_ANALYSIS_FILTER_RESULTS.getValue<string>();
+  if (Object.values(FilterKey).includes(value as FilterKey)) {
+    return value as FilterKey;
+  } else {
+    return defaultFilterSortState.filterKey;
+  }
+}
+
+const VARIANT_ANALYSIS_SORT_RESULTS = new Setting(
+  "defaultResultsSort",
+  VARIANT_ANALYSIS_SETTING,
+);
+
+export function getVariantAnalysisDefaultResultsSort(): SortKey {
+  const value = VARIANT_ANALYSIS_SORT_RESULTS.getValue<string>();
+  if (Object.values(SortKey).includes(value as SortKey)) {
+    return value as SortKey;
+  } else {
+    return defaultFilterSortState.sortKey;
   }
 }
 
@@ -526,10 +688,6 @@ export function getActionBranch(): string {
 
 export function isIntegrationTestMode() {
   return process.env.INTEGRATION_TEST_MODE === "true";
-}
-
-export function isVariantAnalysisLiveResultsEnabled(): boolean {
-  return true;
 }
 
 // Settings for mocking the GitHub API.
@@ -591,4 +749,208 @@ export const CODESPACES_TEMPLATE = new Setting(
 
 export function isCodespacesTemplate() {
   return !!CODESPACES_TEMPLATE.getValue<boolean>();
+}
+
+// Deprecated after v1.9.4. Can be removed in a few versions.
+const DATABASE_DOWNLOAD_SETTING = new Setting("databaseDownload", ROOT_SETTING);
+const DEPRECATED_ALLOW_HTTP_SETTING = new Setting(
+  "allowHttp",
+  DATABASE_DOWNLOAD_SETTING,
+);
+
+const ADDING_DATABASES_SETTING = new Setting("addingDatabases", ROOT_SETTING);
+
+const DOWNLOAD_TIMEOUT_SETTING = new Setting(
+  "downloadTimeout",
+  ADDING_DATABASES_SETTING,
+);
+const ALLOW_HTTP_SETTING = new Setting("allowHttp", ADDING_DATABASES_SETTING);
+
+export function downloadTimeout(): number {
+  return DOWNLOAD_TIMEOUT_SETTING.getValue<number>() || 10;
+}
+
+export function allowHttp(): boolean {
+  return (
+    ALLOW_HTTP_SETTING.getValue<boolean>() ||
+    DEPRECATED_ALLOW_HTTP_SETTING.getValue<boolean>() ||
+    false
+  );
+}
+
+export const ADD_DATABASE_SOURCE_TO_WORKSPACE_SETTING = new Setting(
+  "addDatabaseSourceToWorkspace",
+  ADDING_DATABASES_SETTING,
+);
+
+export function addDatabaseSourceToWorkspace(): boolean {
+  return ADD_DATABASE_SOURCE_TO_WORKSPACE_SETTING.getValue<boolean>() || false;
+}
+
+/**
+ * Parent setting for all settings related to the "Create Query" command.
+ */
+const CREATE_QUERY_COMMAND = new Setting("createQuery", ROOT_SETTING);
+
+/**
+ * The name of the folder where we want to create QL packs.
+ **/
+const QL_PACK_LOCATION = new Setting("qlPackLocation", CREATE_QUERY_COMMAND);
+
+export function getQlPackLocation(): string | undefined {
+  return QL_PACK_LOCATION.getValue<string>() || undefined;
+}
+
+export async function setQlPackLocation(folder: string | undefined) {
+  await QL_PACK_LOCATION.updateValue(folder, ConfigurationTarget.Workspace);
+}
+
+/**
+ * Whether to ask the user to autogenerate a QL pack. The options are "ask" and "never".
+ **/
+const AUTOGENERATE_QL_PACKS = new Setting(
+  "autogenerateQlPacks",
+  CREATE_QUERY_COMMAND,
+);
+
+const AutogenerateQLPacksValues = ["ask", "never"] as const;
+type AutogenerateQLPacks = (typeof AutogenerateQLPacksValues)[number];
+
+export function getAutogenerateQlPacks(): AutogenerateQLPacks {
+  const value = AUTOGENERATE_QL_PACKS.getValue<AutogenerateQLPacks>();
+  return AutogenerateQLPacksValues.includes(value) ? value : "ask";
+}
+
+export async function setAutogenerateQlPacks(choice: AutogenerateQLPacks) {
+  await AUTOGENERATE_QL_PACKS.updateValue(
+    choice,
+    ConfigurationTarget.Workspace,
+  );
+}
+
+const MODEL_SETTING = new Setting("model", ROOT_SETTING);
+const FLOW_GENERATION = new Setting("flowGeneration", MODEL_SETTING);
+const MODEL_EVALUATION = new Setting("evaluation", MODEL_SETTING);
+const MODEL_PACK_LOCATION = new Setting("packLocation", MODEL_SETTING);
+const MODEL_PACK_NAME = new Setting("packName", MODEL_SETTING);
+
+export type ModelConfigPackVariables = {
+  database: string;
+  owner: string;
+  name: string;
+  language: string;
+};
+
+export interface ModelConfig {
+  flowGeneration: boolean;
+  getPackLocation(
+    languageId: string,
+    variables: ModelConfigPackVariables,
+  ): string;
+  getPackName(languageId: string, variables: ModelConfigPackVariables): string;
+}
+
+export class ModelConfigListener extends ConfigListener implements ModelConfig {
+  protected handleDidChangeConfiguration(e: ConfigurationChangeEvent): void {
+    this.handleDidChangeConfigurationForRelevantSettings(
+      [MODEL_SETTING, VSCODE_GITHUB_ENTERPRISE_URI_SETTING],
+      e,
+    );
+  }
+
+  public get flowGeneration(): boolean {
+    return !!FLOW_GENERATION.getValue<boolean>();
+  }
+
+  public get modelEvaluation(): boolean {
+    return !!MODEL_EVALUATION.getValue<boolean>();
+  }
+
+  public getPackLocation(
+    languageId: string,
+    variables: ModelConfigPackVariables,
+  ): string {
+    return substituteConfigVariables(
+      MODEL_PACK_LOCATION.getValue<string>({
+        languageId,
+      }),
+      variables,
+    );
+  }
+
+  public getPackName(
+    languageId: string,
+    variables: ModelConfigPackVariables,
+  ): string {
+    return substituteConfigVariables(
+      MODEL_PACK_NAME.getValue<string>({
+        languageId,
+      }),
+      variables,
+    );
+  }
+}
+
+const GITHUB_DATABASE_SETTING = new Setting("githubDatabase", ROOT_SETTING);
+
+const GITHUB_DATABASE_DOWNLOAD = new Setting(
+  "download",
+  GITHUB_DATABASE_SETTING,
+);
+
+const GitHubDatabaseDownloadValues = ["ask", "never"] as const;
+type GitHubDatabaseDownload = (typeof GitHubDatabaseDownloadValues)[number];
+
+const GITHUB_DATABASE_UPDATE = new Setting("update", GITHUB_DATABASE_SETTING);
+
+const GitHubDatabaseUpdateValues = ["ask", "never"] as const;
+type GitHubDatabaseUpdate = (typeof GitHubDatabaseUpdateValues)[number];
+
+export interface GitHubDatabaseConfig {
+  download: GitHubDatabaseDownload;
+  update: GitHubDatabaseUpdate;
+  setDownload(
+    value: GitHubDatabaseDownload,
+    target?: ConfigurationTarget,
+  ): Promise<void>;
+  setUpdate(
+    value: GitHubDatabaseUpdate,
+    target?: ConfigurationTarget,
+  ): Promise<void>;
+}
+
+export class GitHubDatabaseConfigListener
+  extends ConfigListener
+  implements GitHubDatabaseConfig
+{
+  protected handleDidChangeConfiguration(e: ConfigurationChangeEvent): void {
+    this.handleDidChangeConfigurationForRelevantSettings(
+      [GITHUB_DATABASE_SETTING],
+      e,
+    );
+  }
+
+  public get download(): GitHubDatabaseDownload {
+    const value = GITHUB_DATABASE_DOWNLOAD.getValue<GitHubDatabaseDownload>();
+    return GitHubDatabaseDownloadValues.includes(value) ? value : "ask";
+  }
+
+  public get update(): GitHubDatabaseUpdate {
+    const value = GITHUB_DATABASE_UPDATE.getValue<GitHubDatabaseUpdate>();
+    return GitHubDatabaseUpdateValues.includes(value) ? value : "ask";
+  }
+
+  public async setDownload(
+    value: GitHubDatabaseDownload,
+    target: ConfigurationTarget = ConfigurationTarget.Workspace,
+  ): Promise<void> {
+    await GITHUB_DATABASE_DOWNLOAD.updateValue(value, target);
+  }
+
+  public async setUpdate(
+    value: GitHubDatabaseUpdate,
+    target: ConfigurationTarget = ConfigurationTarget.Workspace,
+  ): Promise<void> {
+    await GITHUB_DATABASE_UPDATE.updateValue(value, target);
+  }
 }

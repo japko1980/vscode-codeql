@@ -2,9 +2,233 @@
 
 ## [UNRELEASED]
 
-- Enable collection of telemetry concerning interactions with UI elements, including buttons, links, and other inputs. [#2114](https://github.com/github/vscode-codeql/pull/2114)
+## 1.17.1 - 23 January 2025
 
-# 1.7.10 - 23 February 2023
+- Remove support for CodeQL CLI versions older than 2.18.4. [#3895](https://github.com/github/vscode-codeql/pull/3895)
+- Fix regex in CodeQL TextMate grammar that was silently failing. [#3903](https://github.com/github/vscode-codeql/pull/3903)
+
+## 1.17.0 - 20 December 2024
+
+- Add a palette command that allows importing all databases directly inside of a parent folder. [#3797](https://github.com/github/vscode-codeql/pull/3797)
+- Only use VS Code telemetry settings instead of using `codeQL.telemetry.enableTelemetry` [#3853](https://github.com/github/vscode-codeql/pull/3853)
+- Improve the performance of the results view with large numbers of results. [#3862](https://github.com/github/vscode-codeql/pull/3862)
+
+## 1.16.1 - 6 November 2024
+
+- Support result columns of type `QlBuiltins::BigInt` in quick evaluations. [#3647](https://github.com/github/vscode-codeql/pull/3647)
+- Fix a bug where the CodeQL CLI would be re-downloaded if you switched to a different filesystem (for example Codespaces or a remote SSH host). [#3762](https://github.com/github/vscode-codeql/pull/3762)
+- Clean up old extension-managed CodeQL CLI distributions. [#3763](https://github.com/github/vscode-codeql/pull/3763)
+- Only compare the source and sink of a path when comparing alerts of local queries. [#3772](https://github.com/github/vscode-codeql/pull/3772)
+
+## 1.16.0 - 10 October 2024
+
+- Increase the required version of VS Code to 1.90.0. [#3737](https://github.com/github/vscode-codeql/pull/3737)
+- Fix a bug where some variant analysis results failed to download. [#3750](https://github.com/github/vscode-codeql/pull/3750)
+
+## 1.15.0 - 26 September 2024
+
+- Update results view to display the length of the shortest path for path queries. [#3687](https://github.com/github/vscode-codeql/pull/3687)
+- Remove support for CodeQL CLI versions older than 2.16.6. [#3728](https://github.com/github/vscode-codeql/pull/3728)
+
+## 1.14.0 - 7 August 2024
+
+- Add Python support to the CodeQL Model Editor. [#3676](https://github.com/github/vscode-codeql/pull/3676)
+- Update variant analysis view to display the length of the shortest path for path queries. [#3671](https://github.com/github/vscode-codeql/pull/3671)
+- Remove support for CodeQL CLI versions older than 2.15.5. [#3681](https://github.com/github/vscode-codeql/pull/3681)
+
+## 1.13.1 - 29 May 2024
+
+- Fix a bug when re-importing test databases that erroneously showed old source code. [#3616](https://github.com/github/vscode-codeql/pull/3616)
+- Update the progress window with details on potentially long-running post-processing steps after running a query. [#3622](https://github.com/github/vscode-codeql/pull/3622)
+
+## 1.13.0 - 1 May 2024
+
+- Add Ruby support to the CodeQL Model Editor. [#3584](https://github.com/github/vscode-codeql/pull/3584)
+- Remove support for CodeQL CLI versions older than 2.14.6. [#3562](https://github.com/github/vscode-codeql/pull/3562)
+
+## 1.12.5 - 9 April 2024
+
+- Add new supported source and sink kinds in the CodeQL Model Editor [#3511](https://github.com/github/vscode-codeql/pull/3511)
+- Fix a bug where the test explorer wouldn't display certain tests. [#3527](https://github.com/github/vscode-codeql/pull/3527)
+- The "model dependency" operation in the model editor can now be cancelled. [#3517](https://github.com/github/vscode-codeql/pull/3517)
+
+## 1.12.4 - 20 March 2024
+
+- Don't show notification after local query cancellation. [#3489](https://github.com/github/vscode-codeql/pull/3489)
+- Databases created from [CodeQL test cases](https://docs.github.com/en/code-security/codeql-cli/using-the-advanced-functionality-of-the-codeql-cli/testing-custom-queries) are now copied into a shared VS Code storage location. This avoids a bug where re-running test cases would fail if the test's database is already imported into the workspace. [#3433](https://github.com/github/vscode-codeql/pull/3433)
+
+## 1.12.3 - 29 February 2024
+
+- Update variant analysis view to show when cancelation is in progress. [#3405](https://github.com/github/vscode-codeql/pull/3405)
+- Remove support for CodeQL CLI versions older than 2.13.5. [#3371](https://github.com/github/vscode-codeql/pull/3371)
+- Add a timeout to downloading databases and the CodeQL CLI. These can be changed using the `codeQL.addingDatabases.downloadTimeout` and `codeQL.cli.downloadTimeout` settings respectively. [#3373](https://github.com/github/vscode-codeql/pull/3373)
+- When downloading a CodeQL database through the model editor, only use credentials when in canary mode. [#3440](https://github.com/github/vscode-codeql/pull/3440)
+
+## 1.12.2 - 14 February 2024
+
+- Stop allowing running variant analyses with a query outside of the workspace. [#3302](https://github.com/github/vscode-codeql/pull/3302)
+
+## 1.12.1 - 31 January 2024
+
+- Enable collection of telemetry for the `codeQL.addingDatabases.addDatabaseSourceToWorkspace` setting. [#3238](https://github.com/github/vscode-codeql/pull/3238)
+- In the CodeQL model editor, you can now select individual method rows and save changes to only the selected rows, instead of having to save the entire library model. [#3156](https://github.com/github/vscode-codeql/pull/3156)
+- If you run a query without having selected a database, we show a more intuitive prompt to help you select a database. [#3214](https://github.com/github/vscode-codeql/pull/3214)
+- Error messages returned from the CodeQL CLI are now less verbose and more user-friendly. [#3259](https://github.com/github/vscode-codeql/pull/3259)
+- The UI for browsing and running CodeQL tests has moved to use VS Code's built-in test UI. This makes the CodeQL test UI more consistent with the test UIs for other languages.
+  This change means that this extension no longer depends on the "Test Explorer UI" and "Test Adapter Converter" extensions. You can uninstall those two extensions if they are
+  not being used by any other extensions you may have installed. [#3232](https://github.com/github/vscode-codeql/pull/3232)
+
+## 1.12.0 - 11 January 2024
+
+- Add a prompt for downloading a GitHub database when opening a GitHub repository. [#3138](https://github.com/github/vscode-codeql/pull/3138)
+- Avoid showing a popup when hovering over source elements in database source files. [#3125](https://github.com/github/vscode-codeql/pull/3125)
+- Add comparison of alerts when comparing query results. This allows viewing path explanations for differences in alerts. [#3113](https://github.com/github/vscode-codeql/pull/3113)
+- Fix a bug where the CodeQL CLI and variant analysis results were corrupted after extraction in VS Code Insiders. [#3151](https://github.com/github/vscode-codeql/pull/3151) & [#3152](https://github.com/github/vscode-codeql/pull/3152)
+- Show progress when extracting the CodeQL CLI distribution during installation. [#3157](https://github.com/github/vscode-codeql/pull/3157)
+- Add option to cancel opening the model editor. [#3189](https://github.com/github/vscode-codeql/pull/3189)
+
+## 1.11.0 - 13 December 2023
+
+- Add a new method modeling panel to classify methods as sources/sinks/summaries while in the context of the source code. [#3128](https://github.com/github/vscode-codeql/pull/3128)
+- Adds the ability to add multiple classifications per method in the CodeQL Model Editor. [#3128](https://github.com/github/vscode-codeql/pull/3128)
+- Switch add and delete button positions in the CodeQL Model Editor. [#3123](https://github.com/github/vscode-codeql/pull/3123)
+- Add a prompt to the "Quick query" command to encourage users in single-folder workspaces to use "Create query" instead. [#3082](https://github.com/github/vscode-codeql/pull/3082)
+- Remove support for CodeQL CLI versions older than 2.11.6. [#3087](https://github.com/github/vscode-codeql/pull/3087)
+- Preserve focus on results viewer when showing a location in a file. [#3088](https://github.com/github/vscode-codeql/pull/3088)
+- The `dataflowtracking` and `tainttracking` snippets expand to the new module-based interface. [#3091](https://github.com/github/vscode-codeql/pull/3091)
+- The compare view will now show a loading message while the results are loading. [#3107](https://github.com/github/vscode-codeql/pull/3107)
+- Make top-banner of the model editor sticky [#3120](https://github.com/github/vscode-codeql/pull/3120)
+
+## 1.10.0 - 16 November 2023
+
+- Add new CodeQL views for managing databases and queries:
+  1. A queries panel that shows all queries in your workspace. It allows you to view, create, and run queries in one place.
+  2. A language selector, which allows you to quickly filter databases and queries by language.
+
+  For more information, see the [documentation](https://codeql.github.com/docs/codeql-for-visual-studio-code/analyzing-your-projects/#filtering-databases-and-queries-by-language).
+- When adding a CodeQL database, we no longer add the database source folder to the workspace by default (since this caused bugs in single-folder workspaces). [#3047](https://github.com/github/vscode-codeql/pull/3047)
+  - You can manually add individual database source folders to the workspace with the "Add Database Source to Workspace" right-click command in the databases view.
+  - To restore the old behavior of adding all database source folders by default, set the `codeQL.addingDatabases.addDatabaseSourceToWorkspace` setting to `true`.
+- Rename the `codeQL.databaseDownload.allowHttp` setting to `codeQL.addingDatabases.allowHttp`, so that database-related settings are grouped together in the Settings UI. [#3047](https://github.com/github/vscode-codeql/pull/3047) & [#3069](https://github.com/github/vscode-codeql/pull/3069)
+- The "Sort by Language" action in the databases view now sorts by name within each language. [#3055](https://github.com/github/vscode-codeql/pull/3055)
+
+## 1.9.4 - 6 November 2023
+
+No user facing changes.
+
+## 1.9.3 - 26 October 2023
+
+- Sorted result set filenames now include a hash of the result set name instead of the full name. [#2955](https://github.com/github/vscode-codeql/pull/2955)
+- The "Install Pack Dependencies" will now only list CodeQL packs located in the workspace. [#2960](https://github.com/github/vscode-codeql/pull/2960)
+- Fix a bug where the "View Query Log" action for a query history item was not working. [#2984](https://github.com/github/vscode-codeql/pull/2984)
+- Add a command to sort items in the databases view by language. [#2993](https://github.com/github/vscode-codeql/pull/2993)
+- Fix not being able to open the results directory or evaluator log for a cancelled local query run. [#2996](https://github.com/github/vscode-codeql/pull/2996)
+- Fix empty row in alert path when the SARIF location was empty. [#3018](https://github.com/github/vscode-codeql/pull/3018)
+
+## 1.9.2 - 12 October 2023
+
+- Fix a bug where the query to Find Definitions in database source files would not be cancelled appropriately. [#2885](https://github.com/github/vscode-codeql/pull/2885)
+- It is now possible to show the language of query history items using the `%l` specifier in the `codeQL.queryHistory.format` setting. Note that this only works for queries run after this upgrade, and older items will show `unknown` as a language. [#2892](https://github.com/github/vscode-codeql/pull/2892)
+- Increase the required version of VS Code to 1.82.0. [#2877](https://github.com/github/vscode-codeql/pull/2877)
+- Fix a bug where the query server was restarted twice after configuration changes. [#2884](https://github.com/github/vscode-codeql/pull/2884).
+- Add support for the `telemetry.telemetryLevel` setting. For more information, see the [telemetry documentation](https://codeql.github.com/docs/codeql-for-visual-studio-code/about-telemetry-in-codeql-for-visual-studio-code). [#2824](https://github.com/github/vscode-codeql/pull/2824).
+- Add a "CodeQL: Trim Cache" command that clears the evaluation cache of a database except for predicates annotated with the `cached` keyword. Its purpose is to get accurate performance measurements when tuning the final stage of a query, like a data-flow configuration. This is equivalent to the `codeql database cleanup --mode=normal` CLI command. In contrast, the existing "CodeQL: Clear Cache" command clears the entire cache. CodeQL CLI v2.15.1 or later is required. [#2928](https://github.com/github/vscode-codeql/pull/2928)
+- Fix syntax highlighting directly after import statements with instantiation arguments. [#2792](https://github.com/github/vscode-codeql/pull/2792)
+- The `debug.saveBeforeStart` setting is now respected when running variant analyses. [#2950](https://github.com/github/vscode-codeql/pull/2950)
+- The 'open database' button of the model editor was renamed to 'open source'. Also, it's now only available if the source archive is available as a workspace folder. [#2945](https://github.com/github/vscode-codeql/pull/2945)
+
+## 1.9.1 - 29 September 2023
+
+- Add warning when using a VS Code version older than 1.82.0. [#2854](https://github.com/github/vscode-codeql/pull/2854)
+- Fix a bug when parsing large evaluation log summaries. [#2858](https://github.com/github/vscode-codeql/pull/2858)
+- Right-align and format numbers in raw result tables. [#2864](https://github.com/github/vscode-codeql/pull/2864)
+- Remove rate limit warning notifications when using Code Search to add repositories to a variant analysis list. [#2812](https://github.com/github/vscode-codeql/pull/2812)
+
+## 1.9.0 - 19 September 2023
+
+- Release the [CodeQL model editor](https://codeql.github.com/docs/codeql-for-visual-studio-code/using-the-codeql-model-editor/) to create CodeQL model packs for Java frameworks. Open the editor using the "CodeQL: Open CodeQL Model Editor (Beta)" command. [#2823](https://github.com/github/vscode-codeql/pull/2823)
+
+## 1.8.12 - 11 September 2023
+
+- Fix a bug where variant analysis queries would fail for queries in the `codeql/java-queries` query pack. [#2786](https://github.com/github/vscode-codeql/pull/2786)
+
+## 1.8.11 - 7 September 2023
+
+- Update how variant analysis results are displayed. For queries with ["path-problem" or "problem" `@kind`](https://codeql.github.com/docs/writing-codeql-queries/metadata-for-codeql-queries/#metadata-properties), you can choose to display the results as rendered alerts or as a table of raw results. For queries with any other `@kind`, the results are displayed as a table. [#2745](https://github.com/github/vscode-codeql/pull/2745) & [#2749](https://github.com/github/vscode-codeql/pull/2749)
+- When running variant analyses, don't download artifacts for repositories with no results. [#2736](https://github.com/github/vscode-codeql/pull/2736)
+- Group the extension settings, so that they're easier to find in the Settings UI. [#2706](https://github.com/github/vscode-codeql/pull/2706)
+
+## 1.8.10 - 15 August 2023
+
+- Add a code lens to make the `CodeQL: Open Referenced File` command more discoverable. Click the "Open referenced file" prompt in a `.qlref` file to jump to the referenced `.ql` file. [#2704](https://github.com/github/vscode-codeql/pull/2704)
+
+## 1.8.9 - 3 August 2023
+
+- Remove "last updated" information and sorting from variant analysis results view. [#2637](https://github.com/github/vscode-codeql/pull/2637)
+- Links to code on GitHub now include column numbers as well as line numbers. [#2406](https://github.com/github/vscode-codeql/pull/2406)
+- No longer highlight trailing commas for jump to definition.  [#2615](https://github.com/github/vscode-codeql/pull/2615)
+- Fix a bug where the QHelp preview page was not being refreshed after changes to the underlying `.qhelp` file. [#2660](https://github.com/github/vscode-codeql/pull/2660)
+
+## 1.8.8 - 17 July 2023
+
+- Remove support for CodeQL CLI versions older than 2.9.4. [#2610](https://github.com/github/vscode-codeql/pull/2610)
+- Implement syntax highlighting for the `additional` and `default` keywords. [#2609](https://github.com/github/vscode-codeql/pull/2609)
+
+## 1.8.7 - 29 June 2023
+
+- Show a run button on the file tab for query files, that will start a local query. This button will only show when a local database is selected in the extension. [#2544](https://github.com/github/vscode-codeql/pull/2544)
+- Add a `CodeQL: Quick Evaluation Count` command to generate the count summary statistics of the results set
+  without spending the time to compute locations and strings. [#2475](https://github.com/github/vscode-codeql/pull/2475)
+
+## 1.8.6 - 14 June 2023
+
+- Add repositories to a variant analysis list with GitHub Code Search. [#2439](https://github.com/github/vscode-codeql/pull/2439) and [#2476](https://github.com/github/vscode-codeql/pull/2476)
+
+## 1.8.5 - 6 June 2023
+
+- Add settings `codeQL.variantAnalysis.defaultResultsFilter` and `codeQL.variantAnalysis.defaultResultsSort` for configuring how variant analysis results are filtered and sorted in the results view. The default is to show all repositories, and to sort by the number of results. [#2392](https://github.com/github/vscode-codeql/pull/2392)
+- Fix bug to ensure error messages have complete stack trace in message logs. [#2425](https://github.com/github/vscode-codeql/pull/2425)
+- Fix bug where the `CodeQL: Compare Query` command did not work for comparing quick-eval queries. [#2422](https://github.com/github/vscode-codeql/pull/2422)
+- Update text of copy and export buttons in variant analysis results view to clarify that they only copy/export the selected/filtered results. [#2427](https://github.com/github/vscode-codeql/pull/2427)
+- Add warning when using unsupported CodeQL CLI version. [#2428](https://github.com/github/vscode-codeql/pull/2428)
+- Retry variant analysis results download if connection times out. [#2440](https://github.com/github/vscode-codeql/pull/2440)
+
+## 1.8.4 - 3 May 2023
+
+- Avoid repeated error messages when unable to monitor a variant analysis. [#2396](https://github.com/github/vscode-codeql/pull/2396)
+- Fix bug where a variant analysis didn't display the `#select` results set correctly when the [query metadata](https://codeql.github.com/docs/writing-codeql-queries/about-codeql-queries/#query-metadata) didn't exactly match the query results. [#2395](https://github.com/github/vscode-codeql/pull/2395)
+- On the variant analysis results page, show the count of successful analyses instead of completed analyses, and indicate the reason why analyses were not successful. [#2349](https://github.com/github/vscode-codeql/pull/2349)
+- Fix bug where the "CodeQL: Set Current Database" command didn't always select the database. [#2384](https://github.com/github/vscode-codeql/pull/2384)
+
+## 1.8.3 - 26 April 2023
+
+- Added ability to filter repositories for a variant analysis to only those that have results [#2343](https://github.com/github/vscode-codeql/pull/2343)
+- Add new configuration option to allow downloading databases from http, non-secure servers. [#2332](https://github.com/github/vscode-codeql/pull/2332)
+- Remove title actions from the query history panel that depended on history items being selected. [#2350](https://github.com/github/vscode-codeql/pull/2350)
+
+## 1.8.2 - 12 April 2023
+
+- Fix bug where users could end up with the managed CodeQL CLI getting uninstalled during upgrades and not reinstalled. [#2294](https://github.com/github/vscode-codeql/pull/2294)
+- Fix bug that was causing code flows to not get updated when switching between results. [#2288](https://github.com/github/vscode-codeql/pull/2288)
+- Restart the CodeQL language server whenever the _CodeQL: Restart Query Server_ command is invoked. This avoids bugs where the CLI version changes to support new language features, but the language server is not updated. [#2238](https://github.com/github/vscode-codeql/pull/2238)
+- Avoid requiring a manual restart of the query server when the [external CLI config file](https://docs.github.com/en/code-security/codeql-cli/using-the-codeql-cli/specifying-command-options-in-a-codeql-configuration-file#using-a-codeql-configuration-file) changes. [#2289](https://github.com/github/vscode-codeql/pull/2289)
+
+## 1.8.1 - 23 March 2023
+
+- Show data flow paths of a variant analysis in a new tab. [#2172](https://github.com/github/vscode-codeql/pull/2172) & [#2182](https://github.com/github/vscode-codeql/pull/2182)
+- Show labels of entities in exported CSV results. [#2170](https://github.com/github/vscode-codeql/pull/2170)
+
+## 1.8.0 - 9 March 2023
+
+- Send telemetry about unhandled errors happening within the extension. [#2125](https://github.com/github/vscode-codeql/pull/2125)
+- Enable multi-repository variant analysis. [#2144](https://github.com/github/vscode-codeql/pull/2144)
+
+## 1.7.11 - 1 March 2023
+
+- Enable collection of telemetry concerning interactions with UI elements, including buttons, links, and other inputs. [#2114](https://github.com/github/vscode-codeql/pull/2114)
+- Prevent the automatic installation of CodeQL CLI version 2.12.3 to avoid a bug in the language server. CodeQL CLI 2.12.2 will be used instead. [#2126](https://github.com/github/vscode-codeql/pull/2126)
+
+## 1.7.10 - 23 February 2023
 
 - Fix bug that was causing unwanted error notifications.
 
@@ -314,7 +538,7 @@ No user facing changes.
 - Allow setting `codeQL.runningQueries.numberOfThreads` and `codeQL.runningTests.numberOfThreads` to 0, (which is interpreted as 'use one thread per core on the machine').
 - Clear the problems view of all CodeQL query results when a database is removed.
 - Add a `View DIL` command on query history items. This opens a text editor containing the Datalog Intermediary Language representation of the compiled query.
-- Remove feature flag for the AST Viewer. For more information on how to use the AST Viewer, [see the documentation](https://help.semmle.com/codeql/codeql-for-vscode/procedures/exploring-the-structure-of-your-source-code.html).
+- Remove feature flag for the AST Viewer. For more information on how to use the AST Viewer, [see the documentation](https://codeql.github.com/docs/codeql-for-visual-studio-code/exploring-the-structure-of-your-source-code/).
 - The `codeQL.runningTests.numberOfThreads` setting is now used correctly when running tests.
 - Alter structure of the _Test Explorer_ tree. It now follows the structure of the filesystem instead of the qlpacks.
 - Ensure output of CodeQL test runs includes compilation error messages and test failure messages.

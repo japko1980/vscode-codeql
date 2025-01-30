@@ -1,5 +1,4 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 import { Codicon } from "./icon";
 
 const Star = styled.span`

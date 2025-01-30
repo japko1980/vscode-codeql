@@ -1,8 +1,10 @@
-import { CellValue } from "../pure/bqrs-cli-types";
-import { tryGetRemoteLocation } from "../pure/bqrs-utils";
-import { createRemoteFileRef } from "../pure/location-link-utils";
-import { parseHighlightedLine, shouldHighlightLine } from "../pure/sarif-utils";
-import { convertNonPrintableChars } from "../pure/text-utils";
+import { tryGetRemoteLocation } from "../common/bqrs-utils";
+import { createRemoteFileRef } from "../common/location-link-utils";
+import {
+  parseHighlightedLine,
+  shouldHighlightLine,
+} from "../common/sarif-utils";
+import { convertNonPrintableChars } from "../common/text-utils";
 import type {
   AnalysisAlert,
   AnalysisRawResults,
@@ -16,8 +18,9 @@ import type {
   VariantAnalysisScannedRepositoryResult,
 } from "./shared/variant-analysis";
 import type { RepositoryWithMetadata } from "./shared/repository";
+import type { CellValue } from "../common/raw-result-types";
 
-export type MarkdownLinkType = "local" | "gist";
+type MarkdownLinkType = "local" | "gist";
 
 export interface MarkdownFile {
   fileName: string;
@@ -30,7 +33,7 @@ export interface RepositorySummary {
   resultCount: number;
 }
 
-export interface VariantAnalysisMarkdown {
+interface VariantAnalysisMarkdown {
   markdownFiles: MarkdownFile[];
   summaries: RepositorySummary[];
 }
@@ -39,7 +42,7 @@ export interface VariantAnalysisMarkdown {
  * Generates markdown files with variant analysis results.
  */
 export async function generateVariantAnalysisMarkdown(
-  variantAnalysis: Pick<VariantAnalysis, "query">,
+  variantAnalysis: Pick<VariantAnalysis, "language" | "query">,
   results: AsyncIterable<
     [VariantAnalysisScannedRepository, VariantAnalysisScannedRepositoryResult]
   >,
@@ -74,7 +77,7 @@ export async function generateVariantAnalysisMarkdown(
       for (const interpretedResult of result.interpretedResults) {
         const individualResult = generateMarkdownForInterpretedResult(
           interpretedResult,
-          variantAnalysis.query.language,
+          variantAnalysis.language,
         );
         resultsFileContent.push(...individualResult);
       }
@@ -102,7 +105,7 @@ export async function generateVariantAnalysisMarkdown(
   };
 }
 
-export function generateVariantAnalysisMarkdownSummary(
+function generateVariantAnalysisMarkdownSummary(
   query: VariantAnalysis["query"],
   summaries: RepositorySummary[],
   linkType: MarkdownLinkType,
@@ -112,7 +115,7 @@ export function generateVariantAnalysisMarkdownSummary(
   lines.push(`### Results for "${query.name}"`, "");
 
   // Expandable section containing query text
-  const queryCodeBlock = ["```ql", ...query.text.split("\n"), "```"];
+  const queryCodeBlock = ["```ql", ...query.text.split("\n"), "```", ""];
   lines.push(...buildExpandableMarkdownSection("Query", queryCodeBlock));
 
   // Padding between sections
@@ -128,6 +131,9 @@ export function generateVariantAnalysisMarkdownSummary(
     lines.push(`| ${fullName} | [${summary.resultCount} result(s)](${link}) |`);
   }
 
+  // Add a trailing newline
+  lines.push("");
+
   return {
     fileName: "_summary",
     content: lines,
@@ -142,8 +148,7 @@ function generateMarkdownForInterpretedResult(
   lines.push(
     createMarkdownRemoteFileRef(
       interpretedResult.fileLink,
-      interpretedResult.highlightedRegion?.startLine,
-      interpretedResult.highlightedRegion?.endLine,
+      interpretedResult.highlightedRegion,
     ),
   );
   lines.push("");
@@ -244,8 +249,7 @@ function generateMarkdownForAlertMessage(
     } else if (token.t === "location") {
       alertMessage += createMarkdownRemoteFileRef(
         token.location.fileLink,
-        token.location.highlightedRegion?.startLine,
-        token.location.highlightedRegion?.endLine,
+        token.location.highlightedRegion,
         token.text,
       );
     }
@@ -269,20 +273,21 @@ function generateMarkdownForPathResults(
       const threadFlow = codeFlow.threadFlows[i];
       const link = createMarkdownRemoteFileRef(
         threadFlow.fileLink,
-        threadFlow.highlightedRegion?.startLine,
-        threadFlow.highlightedRegion?.endLine,
-      );
-      const codeSnippet = generateMarkdownForCodeSnippet(
-        threadFlow.codeSnippet,
-        language,
         threadFlow.highlightedRegion,
       );
-      // Indent the snippet to fit with the numbered list.
-      // The indentation is "n + 2" where the list number is an n-digit number.
-      const codeSnippetIndented = codeSnippet.map(
-        (line) => " ".repeat(listNumber.toString().length + 2) + line,
-      );
-      pathLines.push(`${listNumber}. ${link}`, ...codeSnippetIndented);
+      pathLines.push(`${listNumber}. ${link}`);
+
+      if (threadFlow.codeSnippet) {
+        const codeSnippet = generateMarkdownForCodeSnippet(
+          threadFlow.codeSnippet,
+          language,
+          threadFlow.highlightedRegion,
+        );
+        const indentation = " ".repeat(listNumber.toString().length + 2);
+        pathLines.push(
+          ...codeSnippet.map((line) => (indentation + line).trimEnd()),
+        );
+      }
     }
     lines.push(...buildExpandableMarkdownSection(title, pathLines));
   }
@@ -293,9 +298,9 @@ function generateMarkdownForRawResults(
   analysisRawResults: AnalysisRawResults,
 ): string[] {
   const tableRows: string[] = [];
-  const columnCount = analysisRawResults.schema.columns.length;
+  const columnCount = analysisRawResults.resultSet.columns.length;
   // Table headers are the column names if they exist, and empty otherwise
-  const headers = analysisRawResults.schema.columns.map(
+  const headers = analysisRawResults.resultSet.columns.map(
     (column) => column.name || "",
   );
   const tableHeader = `| ${headers.join(" | ")} |`;
@@ -322,23 +327,25 @@ function generateMarkdownForRawTableCell(
   sourceLocationPrefix: string,
 ) {
   let cellValue: string;
-  switch (typeof value) {
+  switch (value.type) {
     case "string":
     case "number":
     case "boolean":
-      cellValue = `\`${convertNonPrintableChars(value.toString())}\``;
+      cellValue = `\`${convertNonPrintableChars(value.value.toString())}\``;
       break;
-    case "object":
+    case "entity":
       {
         const url = tryGetRemoteLocation(
-          value.url,
+          value.value.url,
           fileLinkPrefix,
           sourceLocationPrefix,
         );
         if (url) {
-          cellValue = `[\`${convertNonPrintableChars(value.label)}\`](${url})`;
+          cellValue = `[\`${convertNonPrintableChars(
+            value.value.label,
+          )}\`](${url})`;
         } else {
-          cellValue = `\`${convertNonPrintableChars(value.label)}\``;
+          cellValue = `\`${convertNonPrintableChars(value.value.label)}\``;
         }
       }
       break;
@@ -351,15 +358,20 @@ function generateMarkdownForRawTableCell(
  * Creates a markdown link to a remote file.
  * If the "link text" is not provided, we use the file path.
  */
-export function createMarkdownRemoteFileRef(
+function createMarkdownRemoteFileRef(
   fileLink: FileLink,
-  startLine?: number,
-  endLine?: number,
+  region?: HighlightedRegion,
   linkText?: string,
 ): string {
   const markdownLink = `[${
     linkText || fileLink.filePath
-  }](${createRemoteFileRef(fileLink, startLine, endLine)})`;
+  }](${createRemoteFileRef(
+    fileLink,
+    region?.startLine,
+    region?.endLine,
+    region?.startColumn,
+    region?.endColumn,
+  )})`;
   return markdownLink;
 }
 
@@ -382,7 +394,6 @@ function buildExpandableMarkdownSection(
     `<summary>${title}</summary>`,
     "",
     ...contents,
-    "",
     "</details>",
     "",
   );

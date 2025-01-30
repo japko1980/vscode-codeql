@@ -1,10 +1,9 @@
-import * as I from "immutable";
-import {
+import type {
   EvaluationLogProblemReporter,
   EvaluationLogScanner,
   EvaluationLogScannerProvider,
 } from "./log-scanner";
-import {
+import type {
   InLayer,
   ComputeRecursive,
   SummaryEvent,
@@ -37,38 +36,49 @@ function makeKey(
   return `${queryCausingWork}:${predicate}${suffix ? ` ${suffix}` : ""}`;
 }
 
-const DEPENDENT_PREDICATES_REGEXP = (() => {
+function getDependentPredicates(operations: string[]): string[] {
+  const id = String.raw`[0-9a-zA-Z:#_\./]+`;
+  const idWithAngleBrackets = String.raw`[0-9a-zA-Z:#_<>\./]+`;
+  const quotedId = String.raw`\`[^\`\r\n]*\``;
   const regexps = [
     // SCAN id
-    String.raw`SCAN\s+([0-9a-zA-Z:#_]+)\s`,
+    String.raw`SCAN\s+(${id}|${quotedId})\s`,
     // JOIN id WITH id
-    String.raw`JOIN\s+([0-9a-zA-Z:#_]+)\s+WITH\s+([0-9a-zA-Z:#_]+)\s`,
+    String.raw`JOIN\s+(${id}|${quotedId})\s+WITH\s+(${id}|${quotedId})\s`,
+    // JOIN WITH id
+    String.raw`JOIN\s+WITH\s+(${id}|${quotedId})\s`,
     // AGGREGATE id, id
-    String.raw`AGGREGATE\s+([0-9a-zA-Z:#_]+)\s*,\s+([0-9a-zA-Z:#_]+)`,
+    String.raw`AGGREGATE\s+(${id}|${quotedId})\s*,\s+(${id}|${quotedId})`,
     // id AND NOT id
-    String.raw`([0-9a-zA-Z:#_]+)\s+AND\s+NOT\s+([0-9a-zA-Z:#_]+)`,
+    String.raw`(${id}|${quotedId})\s+AND\s+NOT\s+(${id}|${quotedId})`,
+    // AND NOT id
+    String.raw`AND\s+NOT\s+(${id}|${quotedId})`,
     // INVOKE HIGHER-ORDER RELATION rel ON <id, ..., id>
-    String.raw`INVOKE\s+HIGHER-ORDER\s+RELATION\s[^\s]+\sON\s+<([0-9a-zA-Z:#_<>]+)((?:,[0-9a-zA-Z:#_<>]+)*)>`,
+    String.raw`INVOKE\s+HIGHER-ORDER\s+RELATION\s[^\s]+\sON\s+<(${idWithAngleBrackets}|${quotedId})((?:,${idWithAngleBrackets}|,${quotedId})*)>`,
     // SELECT id
-    String.raw`SELECT\s+([0-9a-zA-Z:#_]+)`,
+    String.raw`SELECT\s+(${id}|${quotedId})`,
+    // REWRITE id WITH
+    String.raw`REWRITE\s+(${id}|${quotedId})\s+WITH\s`,
+    // id UNION id UNION ... UNION id
+    String.raw`(${id}|${quotedId})((?:\s+UNION\s+${id}|${quotedId})+)`,
   ];
-  return new RegExp(
-    `${String.raw`\{[0-9]+\}\s+[0-9a-zA-Z]+\s=\s(?:` + regexps.join("|")})`,
+  const r = new RegExp(
+    `${
+      String.raw`\{[0-9]+\}\s+(?:[0-9a-zA-Z]+\s=|\|)\s(?:` + regexps.join("|")
+    })`,
   );
-})();
-
-function getDependentPredicates(operations: string[]): I.List<string> {
-  return I.List(operations).flatMap((operation) => {
-    const matches = DEPENDENT_PREDICATES_REGEXP.exec(operation.trim());
-    if (matches !== null) {
-      return I.List(matches)
-        .rest() // Skip the first group as it's just the entire string
-        .filter((x) => !!x && !x.match("r[0-9]+|PRIMITIVE")) // Only keep the references to predicates.
-        .flatMap((x) => x.split(",")) // Group 2 in the INVOKE HIGHER_ORDER RELATION case is a comma-separated list of identifiers.
-        .filter((x) => !!x); // Remove empty strings
-    } else {
-      return I.List();
-    }
+  return operations.flatMap((operation) => {
+    const matches = r.exec(operation.trim()) || [];
+    return matches
+      .slice(1) // Skip the first group as it's just the entire string
+      .filter((x) => !!x)
+      .flatMap((x) => x.split(",")) // Group 2 in the INVOKE HIGHER_ORDER RELATION case is a comma-separated list of identifiers.
+      .flatMap((x) => x.split(" UNION ")) // Split n-ary unions into individual arguments.
+      .filter((x) => !x.match("r[0-9]+|PRIMITIVE")) // Only keep the references to predicates.
+      .filter((x) => !!x) // Remove empty strings
+      .map((x) =>
+        x.startsWith("`") && x.endsWith("`") ? x.substring(1, x.length - 1) : x,
+      ); // Remove quotes from quoted identifiers
   });
 }
 
@@ -141,7 +151,7 @@ function computeJoinOrderBadness(
 interface Bucket {
   tupleCounts: Int32Array;
   resultSize: number;
-  dependentPredicateSizes: I.Map<string, number>;
+  dependentPredicateSizes: Map<string, number>;
 }
 
 class JoinOrderScanner implements EvaluationLogScanner {
@@ -396,12 +406,12 @@ class JoinOrderScanner implements EvaluationLogScanner {
     const dependentPredicates = getDependentPredicates(
       inLayerEvent.ra[raReference],
     );
-    let dependentPredicateSizes: I.Map<string, number>;
+    let dependentPredicateSizes: Map<string, number>;
     // We treat the base case as a non-recursive pipeline. In that case, the dependent predicates are
     // the dependencies of the base case and the cur_deltas.
     if (raReference === "base") {
-      dependentPredicateSizes = I.Map(
-        dependentPredicates.map((pred): [string, number] => {
+      dependentPredicateSizes = dependentPredicates
+        .map((pred): [string, number] => {
           // A base case cannot contain a `prev_delta`, but it can contain a `cur_delta`.
           let size = 0;
           if (pred.endsWith("#cur_delta")) {
@@ -415,28 +425,27 @@ class JoinOrderScanner implements EvaluationLogScanner {
             size = this.predicateSizes.get(hash)!;
           }
           return [pred, size];
-        }),
-      );
+        })
+        .reduce((acc, [pred, size]) => acc.set(pred, size), new Map());
     } else {
       // It's a non-base case in a recursive pipeline. In that case, the dependent predicates are
       // only the prev_deltas.
-      dependentPredicateSizes = I.Map(
-        dependentPredicates
-          .flatMap((pred) => {
-            // If it's actually a prev_delta
-            if (pred.endsWith("#prev_delta")) {
-              // Return the predicate without the #prev_delta suffix.
-              return [pred.slice(0, -"#prev_delta".length)];
-            } else {
-              // Not a recursive delta. Skip it.
-              return [];
-            }
-          })
-          .map((prev): [string, number] => {
-            const size = this.prevDeltaSizes(event, prev, iteration);
-            return [prev, size];
-          }),
-      );
+      dependentPredicateSizes = dependentPredicates
+        .flatMap((pred) => {
+          // If it's actually a prev_delta
+          if (pred.endsWith("#prev_delta")) {
+            // Return the predicate without the #prev_delta suffix.
+            return [pred.slice(0, -"#prev_delta".length)];
+          } else {
+            // Not a recursive delta. Skip it.
+            return [];
+          }
+        })
+        .map((prev): [string, number] => {
+          const size = this.prevDeltaSizes(event, prev, iteration);
+          return [prev, size];
+        })
+        .reduce((acc, [pred, size]) => acc.set(pred, size), new Map());
     }
 
     const deltaSize = inLayerEvent.deltaSizes[iteration];
@@ -464,7 +473,7 @@ class JoinOrderScanner implements EvaluationLogScanner {
         orderTobucket.set(raReference, {
           tupleCounts: new Int32Array(0),
           resultSize: 0,
-          dependentPredicateSizes: I.Map(),
+          dependentPredicateSizes: new Map(),
         });
       }
 
@@ -483,12 +492,18 @@ class JoinOrderScanner implements EvaluationLogScanner {
         this.problemReporter,
       );
       const resultSize = bucket.resultSize + deltaSize;
+
       // Pointwise sum the deltas.
-      const newDependentPredicateSizes =
-        bucket.dependentPredicateSizes.mergeWith(
-          (oldSize, newSize) => oldSize + newSize,
-          dependentPredicateSizes,
+      const newDependentPredicateSizes = new Map<string, number>(
+        bucket.dependentPredicateSizes,
+      );
+      for (const [pred, size] of dependentPredicateSizes) {
+        newDependentPredicateSizes.set(
+          pred,
+          (newDependentPredicateSizes.get(pred) ?? 0) + size,
         );
+      }
+
       orderTobucket.set(raReference, {
         tupleCounts: newTupleCounts,
         resultSize,

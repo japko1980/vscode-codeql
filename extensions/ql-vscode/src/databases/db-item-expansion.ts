@@ -1,28 +1,16 @@
-import { DbItem, DbItemKind, flattenDbItems } from "./db-item";
+import type { DbItem } from "./db-item";
+import { DbItemKind, flattenDbItems } from "./db-item";
 
 export type ExpandedDbItem =
-  | RootLocalExpandedDbItem
-  | LocalUserDefinedListExpandedDbItem
   | RootRemoteExpandedDbItem
   | RemoteUserDefinedListExpandedDbItem;
 
 export enum ExpandedDbItemKind {
-  RootLocal = "rootLocal",
-  LocalUserDefinedList = "localUserDefinedList",
   RootRemote = "rootRemote",
   RemoteUserDefinedList = "remoteUserDefinedList",
 }
 
-export interface RootLocalExpandedDbItem {
-  kind: ExpandedDbItemKind.RootLocal;
-}
-
-export interface LocalUserDefinedListExpandedDbItem {
-  kind: ExpandedDbItemKind.LocalUserDefinedList;
-  listName: string;
-}
-
-export interface RootRemoteExpandedDbItem {
+interface RootRemoteExpandedDbItem {
   kind: ExpandedDbItemKind.RootRemote;
 }
 
@@ -80,13 +68,6 @@ export function cleanNonExistentExpandedItems(
 
 function mapDbItemToExpandedDbItem(dbItem: DbItem): ExpandedDbItem {
   switch (dbItem.kind) {
-    case DbItemKind.RootLocal:
-      return { kind: ExpandedDbItemKind.RootLocal };
-    case DbItemKind.LocalList:
-      return {
-        kind: ExpandedDbItemKind.LocalUserDefinedList,
-        listName: dbItem.listName,
-      };
     case DbItemKind.RootRemote:
       return { kind: ExpandedDbItemKind.RootRemote };
     case DbItemKind.RemoteUserDefinedList:
@@ -104,13 +85,6 @@ function isDbItemEqualToExpandedDbItem(
   expandedDbItem: ExpandedDbItem,
 ) {
   switch (dbItem.kind) {
-    case DbItemKind.RootLocal:
-      return expandedDbItem.kind === ExpandedDbItemKind.RootLocal;
-    case DbItemKind.LocalList:
-      return (
-        expandedDbItem.kind === ExpandedDbItemKind.LocalUserDefinedList &&
-        expandedDbItem.listName === dbItem.listName
-      );
     case DbItemKind.RootRemote:
       return expandedDbItem.kind === ExpandedDbItemKind.RootRemote;
     case DbItemKind.RemoteUserDefinedList:
@@ -118,7 +92,6 @@ function isDbItemEqualToExpandedDbItem(
         expandedDbItem.kind === ExpandedDbItemKind.RemoteUserDefinedList &&
         expandedDbItem.listName === dbItem.listName
       );
-    case DbItemKind.LocalDatabase:
     case DbItemKind.RemoteSystemDefinedList:
     case DbItemKind.RemoteOwner:
     case DbItemKind.RemoteRepo:

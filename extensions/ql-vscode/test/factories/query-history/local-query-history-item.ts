@@ -1,12 +1,14 @@
 import { faker } from "@faker-js/faker";
-import { InitialQueryInfo, LocalQueryInfo } from "../../../src/query-results";
-import {
+import type { InitialQueryInfo } from "../../../src/query-results";
+import { LocalQueryInfo } from "../../../src/query-results";
+import type {
   QueryEvaluationInfo,
   QueryWithResults,
 } from "../../../src/run-queries-shared";
+import { QueryOutputDir } from "../../../src/local-queries/query-output-dir";
 import { CancellationTokenSource } from "vscode";
-import { QueryResultType } from "../../../src/pure/legacy-messages";
-import { QueryMetadata } from "../../../src/pure/interface-types";
+import type { QueryMetadata } from "../../../src/common/interface-types";
+import type { QueryLanguage } from "../../../src/common/query-language";
 
 export function createMockLocalQueryInfo({
   startTime = new Date(),
@@ -16,6 +18,8 @@ export function createMockLocalQueryInfo({
   dbName = "db-name",
   hasMetadata = false,
   queryWithResults = undefined,
+  language = undefined,
+  outputDir = new QueryOutputDir("/a/b/c"),
 }: {
   startTime?: Date;
   resultCount?: number;
@@ -24,13 +28,9 @@ export function createMockLocalQueryInfo({
   dbName?: string;
   hasMetadata?: boolean;
   queryWithResults?: QueryWithResults | undefined;
+  language?: QueryLanguage;
+  outputDir?: QueryOutputDir | undefined;
 }): LocalQueryInfo {
-  const cancellationToken = {
-    dispose: () => {
-      /**/
-    },
-  } as CancellationTokenSource;
-
   const initialQueryInfo = {
     queryText: "select 1",
     isQuickQuery: false,
@@ -40,13 +40,18 @@ export function createMockLocalQueryInfo({
     databaseInfo: {
       databaseUri: "databaseUri",
       name: dbName,
+      language,
     },
     start: startTime,
-    id: faker.datatype.number().toString(),
+    id: faker.number.int().toString(),
     userSpecifiedLabel,
+    outputDir,
   } as InitialQueryInfo;
 
-  const localQuery = new LocalQueryInfo(initialQueryInfo, cancellationToken);
+  const localQuery = new LocalQueryInfo(
+    initialQueryInfo,
+    new CancellationTokenSource(),
+  );
 
   localQuery.failureReason = failureReason;
   localQuery.cancel = () => {
@@ -74,7 +79,6 @@ export function createMockQueryWithResults({
   hasInterpretedResults?: boolean;
   hasMetadata?: boolean;
 }): QueryWithResults {
-  const dispose = jest.fn();
   const deleteQuery = jest.fn();
   const metadata = hasMetadata
     ? ({ name: "query-name" } as QueryMetadata)
@@ -87,12 +91,8 @@ export function createMockQueryWithResults({
       metadata,
     } as unknown as QueryEvaluationInfo,
     successful: didRunSuccessfully,
-    dispose,
-    result: {
-      evaluationTime: 1,
-      queryId: 0,
-      runId: 0,
-      resultType: QueryResultType.SUCCESS,
-    },
+    message: didRunSuccessfully
+      ? "finished in 0 seconds"
+      : "compilation failed: unknown error",
   };
 }

@@ -1,20 +1,42 @@
-import * as React from "react";
-
-import { SetComparisonsMessage } from "../../pure/interface-types";
-import RawTableHeader from "../results/RawTableHeader";
+import type {
+  SetComparisonQueryInfoMessage,
+  SetComparisonsMessage,
+  UserSettings,
+} from "../../common/interface-types";
 import { className } from "../results/result-table-utils";
-import { ResultRow } from "../../pure/bqrs-cli-types";
-import RawTableRow from "../results/RawTableRow";
 import { vscode } from "../vscode-api";
-import { sendTelemetry } from "../common/telemetry";
+import TextButton from "../common/TextButton";
+import { styled } from "styled-components";
+import { RawCompareResultTable } from "./RawCompareResultTable";
+import { InterpretedCompareResultTable } from "./InterpretedCompareResultTable";
 
 interface Props {
+  queryInfo: SetComparisonQueryInfoMessage;
   comparison: SetComparisonsMessage;
+  userSettings: UserSettings;
 }
 
-export default function CompareTable(props: Props) {
-  const comparison = props.comparison;
-  const rows = props.comparison.rows!;
+const OpenButton = styled(TextButton)`
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+`;
+
+const Table = styled.table`
+  margin: 20px 0;
+  width: 100%;
+
+  & > tbody {
+    vertical-align: top;
+  }
+`;
+
+export default function CompareTable({
+  queryInfo,
+  comparison,
+  userSettings,
+}: Props) {
+  const result = comparison.result!;
 
   async function openQuery(kind: "from" | "to") {
     vscode.postMessage({
@@ -23,78 +45,72 @@ export default function CompareTable(props: Props) {
     });
   }
 
-  function createRows(rows: ResultRow[], databaseUri: string) {
-    return (
-      <tbody>
-        {rows.map((row, rowIndex) => (
-          <RawTableRow
-            key={rowIndex}
-            rowIndex={rowIndex}
-            row={row}
-            databaseUri={databaseUri}
-            onSelected={() => {
-              sendTelemetry("comapre-view-result-clicked");
-            }}
-          />
-        ))}
-      </tbody>
-    );
-  }
-
   return (
-    <table className="vscode-codeql__compare-body">
+    <Table>
       <thead>
         <tr>
           <td>
-            <a
-              onClick={() => openQuery("from")}
-              className="vscode-codeql__compare-open"
-            >
-              {comparison.stats.fromQuery?.name}
-            </a>
+            <OpenButton onClick={() => openQuery("from")}>
+              {queryInfo.stats.fromQuery?.name}
+            </OpenButton>
           </td>
           <td>
-            <a
-              onClick={() => openQuery("to")}
-              className="vscode-codeql__compare-open"
-            >
-              {comparison.stats.toQuery?.name}
-            </a>
+            <OpenButton onClick={() => openQuery("to")}>
+              {queryInfo.stats.toQuery?.name}
+            </OpenButton>
           </td>
         </tr>
         <tr>
-          <td>{comparison.stats.fromQuery?.time}</td>
-          <td>{comparison.stats.toQuery?.time}</td>
+          <td>{queryInfo.stats.fromQuery?.time}</td>
+          <td>{queryInfo.stats.toQuery?.time}</td>
         </tr>
         <tr>
-          <th>{rows.from.length} rows removed</th>
-          <th>{rows.to.length} rows added</th>
+          <th>{result.from.length} rows removed</th>
+          <th>{result.to.length} rows added</th>
         </tr>
       </thead>
       <tbody>
         <tr>
           <td>
-            <table className={className}>
-              <RawTableHeader
-                columns={comparison.columns}
+            {result.kind === "raw" && (
+              <RawCompareResultTable
+                columns={result.columns}
                 schemaName={comparison.currentResultSetName}
-                preventSort={true}
+                rows={result.from}
+                databaseUri={queryInfo.databaseUri}
+                className={className}
               />
-              {createRows(rows.from, comparison.databaseUri)}
-            </table>
+            )}
+            {result.kind === "interpreted" && (
+              <InterpretedCompareResultTable
+                results={result.from}
+                userSettings={userSettings}
+                databaseUri={queryInfo.databaseUri}
+                sourceLocationPrefix={result.sourceLocationPrefix}
+              />
+            )}
           </td>
           <td>
-            <table className={className}>
-              <RawTableHeader
-                columns={comparison.columns}
+            {result.kind === "raw" && (
+              <RawCompareResultTable
+                columns={result.columns}
                 schemaName={comparison.currentResultSetName}
-                preventSort={true}
+                rows={result.to}
+                databaseUri={queryInfo.databaseUri}
+                className={className}
               />
-              {createRows(rows.to, comparison.databaseUri)}
-            </table>
+            )}
+            {result.kind === "interpreted" && (
+              <InterpretedCompareResultTable
+                results={result.to}
+                userSettings={userSettings}
+                databaseUri={queryInfo.databaseUri}
+                sourceLocationPrefix={result.sourceLocationPrefix}
+              />
+            )}
           </td>
         </tr>
       </tbody>
-    </table>
+    </Table>
   );
 }

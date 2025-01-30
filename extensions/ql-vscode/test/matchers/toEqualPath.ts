@@ -1,7 +1,8 @@
 import { expect } from "@jest/globals";
 import type { MatcherFunction } from "expect";
-import { pathsEqual } from "../../src/pure/files";
+import { pathsEqual } from "../../src/common/files";
 
+// eslint-disable-next-line func-style -- We need to set the type of this function
 const toEqualPath: MatcherFunction<[expectedPath: unknown]> = function (
   actual,
   expectedPath,
@@ -10,7 +11,7 @@ const toEqualPath: MatcherFunction<[expectedPath: unknown]> = function (
     throw new Error("These must be of type string!");
   }
 
-  const pass = pathsEqual(actual, expectedPath, process.platform);
+  const pass = pathsEqual(actual, expectedPath);
   if (pass) {
     return {
       message: () =>

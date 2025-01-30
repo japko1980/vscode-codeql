@@ -1,7 +1,6 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react";
-import { formatDate } from "../../pure/date";
+import { formatDate } from "../../common/date";
 import { VariantAnalysisStatus } from "../../variant-analysis/shared/variant-analysis";
 
 export type VariantAnalysisStatusStatsProps = {
@@ -29,7 +28,8 @@ export const VariantAnalysisStatusStats = ({
 }: VariantAnalysisStatusStatsProps) => {
   return (
     <Container>
-      {variantAnalysisStatus === VariantAnalysisStatus.InProgress ? (
+      {variantAnalysisStatus === VariantAnalysisStatus.InProgress ||
+      variantAnalysisStatus === VariantAnalysisStatus.Canceling ? (
         <div>
           <Icon className="codicon codicon-loading codicon-modifier-spin" />
         </div>
@@ -37,7 +37,7 @@ export const VariantAnalysisStatusStats = ({
         <span>{completedAt !== undefined ? formatDate(completedAt) : "-"}</span>
       )}
       {onViewLogsClick && (
-        <VSCodeLink onClick={onViewLogsClick}>View logs</VSCodeLink>
+        <VSCodeLink onClick={onViewLogsClick}>View actions logs</VSCodeLink>
       )}
     </Container>
   );

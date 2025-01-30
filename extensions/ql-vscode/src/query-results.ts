@@ -1,11 +1,11 @@
-import { CancellationTokenSource, env } from "vscode";
+import type { CancellationTokenSource } from "vscode";
+import { env } from "vscode";
 
-import * as messages from "./pure/messages-shared";
-import * as legacyMessages from "./pure/legacy-messages";
-import * as cli from "./cli";
+import type { Position } from "./query-server/messages-shared";
+import type { CodeQLCliServer, SourceInfo } from "./codeql-cli/cli";
 import { pathExists } from "fs-extra";
 import { basename } from "path";
-import {
+import type {
   RawResultsSortState,
   SortedResultSetInfo,
   QueryMetadata,
@@ -14,11 +14,15 @@ import {
   SarifInterpretationData,
   GraphInterpretationData,
   DatabaseInfo,
-} from "./pure/interface-types";
-import { QueryStatus } from "./query-status";
-import { QueryEvaluationInfo, QueryWithResults } from "./run-queries-shared";
-import { formatLegacyMessage } from "./legacy-query-server/run-queries";
-import { sarifParser } from "./sarif-parser";
+} from "./common/interface-types";
+import { QueryStatus } from "./query-history/query-status";
+import type {
+  EvaluatorLogPaths,
+  QueryEvaluationInfo,
+  QueryWithResults,
+} from "./run-queries-shared";
+import type { QueryOutputDir } from "./local-queries/query-output-dir";
+import { sarifParser } from "./common/sarif-parser";
 
 /**
  * query-results.ts
@@ -37,75 +41,39 @@ export interface InitialQueryInfo {
   readonly queryText: string; // text of the selected file, or the selected text when doing quick eval
   readonly isQuickQuery: boolean;
   readonly isQuickEval: boolean;
-  readonly quickEvalPosition?: messages.Position;
+  readonly isQuickEvalCount?: boolean; // Missing is false for backwards compatibility
+  readonly quickEvalPosition?: Position;
   readonly queryPath: string;
   readonly databaseInfo: DatabaseInfo;
   readonly start: Date;
   readonly id: string; // unique id for this query.
+  readonly outputDir?: QueryOutputDir; // If missing, we do not have a query save dir. The query may have been cancelled. This is only for backwards compatibility.
 }
 
 export class CompletedQueryInfo implements QueryWithResults {
-  readonly query: QueryEvaluationInfo;
-  readonly message?: string;
-  readonly successful?: boolean;
-  /**
-   * The legacy result. This is only set when loading from the query history.
-   */
-  readonly result: legacyMessages.EvaluationResult;
-  readonly logFileLocation?: string;
-  resultCount: number;
+  constructor(
+    public readonly query: QueryEvaluationInfo,
+    public readonly logFileLocation: string | undefined,
+    public readonly successful: boolean,
+    public readonly message: string,
+    /**
+     * How we're currently sorting alerts. This is not mere interface
+     * state due to truncation; on re-sort, we want to read in the file
+     * again, sort it, and only ship off a reasonable number of results
+     * to the webview. Undefined means to use whatever order is in the
+     * sarif file.
+     */
+    public interpretedResultsSortState: InterpretedResultsSortState | undefined,
+    public resultCount: number = 0,
 
-  /**
-   * This dispose method is called when the query is removed from the history view.
-   */
-  dispose: () => void;
-
-  /**
-   * Map from result set name to SortedResultSetInfo.
-   */
-  sortedResultsInfo: Record<string, SortedResultSetInfo>;
-
-  /**
-   * How we're currently sorting alerts. This is not mere interface
-   * state due to truncation; on re-sort, we want to read in the file
-   * again, sort it, and only ship off a reasonable number of results
-   * to the webview. Undefined means to use whatever order is in the
-   * sarif file.
-   */
-  interpretedResultsSortState: InterpretedResultsSortState | undefined;
-
-  /**
-   * Note that in the {@link deserializeQueryHistory} method, we create a CompletedQueryInfo instance
-   * by explicitly setting the prototype in order to avoid calling this constructor.
-   */
-  constructor(evaluation: QueryWithResults) {
-    this.query = evaluation.query;
-    this.logFileLocation = evaluation.logFileLocation;
-    this.result = evaluation.result;
-
-    this.message = evaluation.message;
-    this.successful = evaluation.successful;
-    // Use the dispose method from the evaluation.
-    // The dispose will clean up any additional log locations that this
-    // query may have created.
-    this.dispose = evaluation.dispose;
-
-    this.sortedResultsInfo = {};
-    this.resultCount = 0;
-  }
+    /**
+     * Map from result set name to SortedResultSetInfo.
+     */
+    public sortedResultsInfo: Record<string, SortedResultSetInfo> = {},
+  ) {}
 
   setResultCount(value: number) {
     this.resultCount = value;
-  }
-
-  get statusString(): string {
-    if (this.message) {
-      return this.message;
-    } else if (this.result) {
-      return formatLegacyMessage(this.result);
-    } else {
-      throw new Error("No status available");
-    }
   }
 
   getResultsPath(selectedTable: string, useSorted = true): string {
@@ -119,7 +87,7 @@ export class CompletedQueryInfo implements QueryWithResults {
   }
 
   async updateSortState(
-    server: cli.CodeQLCliServer,
+    server: CodeQLCliServer,
     resultSetName: string,
     sortState?: RawResultsSortState,
   ): Promise<void> {
@@ -154,10 +122,11 @@ export class CompletedQueryInfo implements QueryWithResults {
  * Call cli command to interpret SARIF results.
  */
 export async function interpretResultsSarif(
-  cli: cli.CodeQLCliServer,
+  cli: CodeQLCliServer,
   metadata: QueryMetadata | undefined,
   resultsPaths: ResultsPaths,
-  sourceInfo?: cli.SourceInfo,
+  sourceInfo?: SourceInfo,
+  args?: string[],
 ): Promise<SarifInterpretationData> {
   const { resultsPath, interpretedResultsPath } = resultsPaths;
   let res;
@@ -169,6 +138,7 @@ export async function interpretResultsSarif(
       resultsPath,
       interpretedResultsPath,
       sourceInfo,
+      args,
     );
   }
   return { ...res, t: "SarifInterpretationData" };
@@ -178,18 +148,18 @@ export async function interpretResultsSarif(
  * Call cli command to interpret graph results.
  */
 export async function interpretGraphResults(
-  cli: cli.CodeQLCliServer,
+  cliServer: CodeQLCliServer,
   metadata: QueryMetadata | undefined,
   resultsPaths: ResultsPaths,
-  sourceInfo?: cli.SourceInfo,
+  sourceInfo?: SourceInfo,
 ): Promise<GraphInterpretationData> {
   const { resultsPath, interpretedResultsPath } = resultsPaths;
   if (await pathExists(interpretedResultsPath)) {
-    const dot = await cli.readDotFiles(interpretedResultsPath);
+    const dot = await cliServer.readDotFiles(interpretedResultsPath);
     return { dot, t: "GraphInterpretationData" };
   }
 
-  const dot = await cli.interpretBqrsGraph(
+  const dot = await cliServer.interpretBqrsGraph(
     ensureMetadataIsComplete(metadata),
     resultsPath,
     interpretedResultsPath,
@@ -225,20 +195,12 @@ export type CompletedLocalQueryInfo = LocalQueryInfo & {
 export class LocalQueryInfo {
   readonly t = "local";
 
-  public failureReason: string | undefined;
-  public completedQuery: CompletedQueryInfo | undefined;
-  public evalLogLocation: string | undefined;
-  public evalLogSummaryLocation: string | undefined;
-  public jsonEvalLogSummaryLocation: string | undefined;
-  public evalLogSummarySymbolsLocation: string | undefined;
-
-  /**
-   * Note that in the {@link deserializeQueryHistory} method, we create a FullQueryInfo instance
-   * by explicitly setting the prototype in order to avoid calling this constructor.
-   */
   constructor(
     public readonly initialInfo: InitialQueryInfo,
     private cancellationSource?: CancellationTokenSource, // used to cancel in progress queries
+    public failureReason?: string,
+    public completedQuery?: CompletedQueryInfo,
+    public evaluatorLogPaths?: EvaluatorLogPaths,
   ) {
     /**/
   }
@@ -260,6 +222,11 @@ export class LocalQueryInfo {
 
   set userSpecifiedLabel(label: string | undefined) {
     this.initialInfo.userSpecifiedLabel = label;
+  }
+
+  /** Sets the paths to the various structured evaluator logs. */
+  public setEvaluatorLogPaths(logPaths: EvaluatorLogPaths): void {
+    this.evaluatorLogPaths = logPaths;
   }
 
   /**
@@ -284,7 +251,9 @@ export class LocalQueryInfo {
    * - Otherwise, return the query file name.
    */
   getQueryName() {
-    if (this.initialInfo.quickEvalPosition) {
+    if (this.initialInfo.isQuickEvalCount) {
+      return `Quick evaluation counts of ${this.getQueryFileName()}`;
+    } else if (this.initialInfo.isQuickEval) {
       return `Quick evaluation of ${this.getQueryFileName()}`;
     } else if (this.completedQuery?.query.metadata?.name) {
       return this.completedQuery?.query.metadata?.name;
@@ -298,7 +267,13 @@ export class LocalQueryInfo {
   }
 
   completeThisQuery(info: QueryWithResults): void {
-    this.completedQuery = new CompletedQueryInfo(info);
+    this.completedQuery = new CompletedQueryInfo(
+      info.query,
+      info.query.logPath,
+      info.successful,
+      info.message,
+      undefined,
+    );
 
     // dispose of the cancellation token source and also ensure the source is not serialized as JSON
     this.cancellationSource?.dispose();
@@ -321,5 +296,9 @@ export class LocalQueryInfo {
     } else {
       return QueryStatus.Failed;
     }
+  }
+
+  get databaseName() {
+    return this.initialInfo.databaseInfo.name;
   }
 }

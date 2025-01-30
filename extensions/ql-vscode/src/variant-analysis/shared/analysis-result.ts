@@ -1,7 +1,6 @@
-import { RawResultSet, ResultSetSchema } from "../../pure/bqrs-cli-types";
+import type { RawResultSet } from "../../common/raw-result-types";
 
 export interface AnalysisRawResults {
-  schema: ResultSetSchema;
   resultSet: RawResultSet;
   fileLinkPrefix: string;
   sourceLocationPrefix: string;
@@ -42,7 +41,7 @@ export interface CodeFlow {
 
 export interface ThreadFlow {
   fileLink: FileLink;
-  codeSnippet: CodeSnippet;
+  codeSnippet?: CodeSnippet;
   highlightedRegion?: HighlightedRegion;
   message?: AnalysisMessage;
 }
@@ -55,7 +54,7 @@ export type AnalysisMessageToken =
   | AnalysisMessageTextToken
   | AnalysisMessageLocationToken;
 
-export interface AnalysisMessageTextToken {
+interface AnalysisMessageTextToken {
   t: "text";
   text: string;
 }
@@ -63,10 +62,12 @@ export interface AnalysisMessageTextToken {
 export interface AnalysisMessageLocationToken {
   t: "location";
   text: string;
-  location: {
-    fileLink: FileLink;
-    highlightedRegion?: HighlightedRegion;
-  };
+  location: AnalysisMessageLocationTokenLocation;
+}
+
+export interface AnalysisMessageLocationTokenLocation {
+  fileLink: FileLink;
+  highlightedRegion?: HighlightedRegion;
 }
 
 export type ResultSeverity = "Recommendation" | "Warning" | "Error";

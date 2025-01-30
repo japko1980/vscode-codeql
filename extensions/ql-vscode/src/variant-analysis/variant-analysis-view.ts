@@ -1,37 +1,51 @@
-import { commands, ExtensionContext, ViewColumn } from "vscode";
-import { AbstractWebview, WebviewPanelConfig } from "../abstract-webview";
-import { extLogger } from "../common";
+import { ViewColumn } from "vscode";
+import type { WebviewPanelConfig } from "../common/vscode/abstract-webview";
+import { AbstractWebview } from "../common/vscode/abstract-webview";
 import {
+  showAndLogExceptionWithTelemetry,
+  showAndLogWarningMessage,
+} from "../common/logging";
+import type {
   FromVariantAnalysisMessage,
   ToVariantAnalysisMessage,
-} from "../pure/interface-types";
-import { assertNever } from "../pure/helpers-pure";
-import {
+} from "../common/interface-types";
+import { assertNever } from "../common/helpers-pure";
+import type {
   VariantAnalysis,
   VariantAnalysisScannedRepositoryResult,
   VariantAnalysisScannedRepositoryState,
 } from "./shared/variant-analysis";
-import {
+import type {
   VariantAnalysisViewInterface,
   VariantAnalysisViewManager,
 } from "./variant-analysis-view-manager";
-import { showAndLogWarningMessage } from "../helpers";
-import { telemetryListener } from "../telemetry";
+import { telemetryListener } from "../common/vscode/telemetry";
+import { redactableError } from "../common/errors";
+import { DataFlowPathsView } from "./data-flow-paths-view";
+import type { DataFlowPaths } from "./shared/data-flow-paths";
+import type { App } from "../common/app";
+import {
+  getVariantAnalysisDefaultResultsFilter,
+  getVariantAnalysisDefaultResultsSort,
+} from "../config";
 
 export class VariantAnalysisView
   extends AbstractWebview<ToVariantAnalysisMessage, FromVariantAnalysisMessage>
   implements VariantAnalysisViewInterface
 {
   public static readonly viewType = "codeQL.variantAnalysis";
+  private readonly dataFlowPathsView: DataFlowPathsView;
 
   public constructor(
-    ctx: ExtensionContext,
+    protected readonly app: App,
     public readonly variantAnalysisId: number,
     private readonly manager: VariantAnalysisViewManager<VariantAnalysisView>,
   ) {
-    super(ctx);
+    super(app);
 
     manager.registerView(this);
+
+    this.dataFlowPathsView = new DataFlowPathsView(app);
   }
 
   public async openView() {
@@ -82,7 +96,7 @@ export class VariantAnalysisView
   }
 
   protected async getPanelConfig(): Promise<WebviewPanelConfig> {
-    const variantAnalysis = await this.manager.getVariantAnalysis(
+    const variantAnalysis = this.manager.tryGetVariantAnalysis(
       this.variantAnalysisId,
     );
 
@@ -106,52 +120,53 @@ export class VariantAnalysisView
 
         break;
       case "cancelVariantAnalysis":
-        void commands.executeCommand(
-          "codeQL.cancelVariantAnalysis",
-          this.variantAnalysisId,
-        );
+        await this.manager.cancelVariantAnalysis(this.variantAnalysisId);
         break;
       case "requestRepositoryResults":
-        void commands.executeCommand(
+        void this.app.commands.execute(
           "codeQL.loadVariantAnalysisRepoResults",
           this.variantAnalysisId,
           msg.repositoryFullName,
         );
         break;
       case "openQueryFile":
-        void commands.executeCommand(
-          "codeQL.openVariantAnalysisQueryFile",
-          this.variantAnalysisId,
-        );
+        await this.manager.openQueryFile(this.variantAnalysisId);
         break;
       case "openQueryText":
-        void commands.executeCommand(
-          "codeQL.openVariantAnalysisQueryText",
-          this.variantAnalysisId,
-        );
+        await this.manager.openQueryText(this.variantAnalysisId);
         break;
       case "copyRepositoryList":
-        void commands.executeCommand(
-          "codeQL.copyVariantAnalysisRepoList",
+        await this.manager.copyRepoListToClipboard(
           this.variantAnalysisId,
           msg.filterSort,
         );
         break;
       case "exportResults":
-        void commands.executeCommand(
-          "codeQL.exportVariantAnalysisResults",
+        await this.manager.exportResults(
           this.variantAnalysisId,
           msg.filterSort,
         );
         break;
       case "openLogs":
-        await commands.executeCommand(
+        await this.manager.commandManager.execute(
           "codeQL.openVariantAnalysisLogs",
           this.variantAnalysisId,
         );
         break;
+      case "showDataFlowPaths":
+        await this.showDataFlows(msg.dataFlowPaths);
+        break;
       case "telemetry":
         telemetryListener?.sendUIInteraction(msg.action);
+        break;
+      case "unhandledError":
+        void showAndLogExceptionWithTelemetry(
+          this.app.logger,
+          this.app.telemetry,
+          redactableError(
+            msg.error,
+          )`Unhandled error in variant analysis results view: ${msg.error.message}`,
+        );
         break;
       default:
         assertNever(msg);
@@ -161,23 +176,37 @@ export class VariantAnalysisView
   protected async onWebViewLoaded() {
     super.onWebViewLoaded();
 
-    void extLogger.log("Variant analysis view loaded");
+    void this.app.logger.log("Variant analysis view loaded");
 
-    const variantAnalysis = await this.manager.getVariantAnalysis(
+    const variantAnalysis = this.manager.tryGetVariantAnalysis(
       this.variantAnalysisId,
     );
 
     if (!variantAnalysis) {
-      void showAndLogWarningMessage("Unable to load variant analysis");
+      void showAndLogWarningMessage(
+        this.app.logger,
+        "Unable to load variant analysis",
+      );
       return;
     }
+
+    const filterSortState = {
+      searchValue: "",
+      filterKey: getVariantAnalysisDefaultResultsFilter(),
+      sortKey: getVariantAnalysisDefaultResultsSort(),
+    };
 
     await this.postMessage({
       t: "setVariantAnalysis",
       variantAnalysis,
     });
 
-    const repoStates = await this.manager.getRepoStates(this.variantAnalysisId);
+    await this.postMessage({
+      t: "setFilterSortState",
+      filterSortState,
+    });
+
+    const repoStates = this.manager.getRepoStates(this.variantAnalysisId);
     if (repoStates.length === 0) {
       return;
     }
@@ -189,8 +218,18 @@ export class VariantAnalysisView
   }
 
   private getTitle(variantAnalysis: VariantAnalysis | undefined): string {
-    return variantAnalysis
-      ? `${variantAnalysis.query.name} - Variant Analysis Results`
-      : `Variant Analysis ${this.variantAnalysisId} - Results`;
+    if (!variantAnalysis) {
+      return `Variant Analysis ${this.variantAnalysisId} - Results`;
+    }
+
+    if (variantAnalysis.queries) {
+      return `Variant Analysis using multiple queries - Results`;
+    } else {
+      return `${variantAnalysis.query.name} - Variant Analysis Results`;
+    }
+  }
+
+  private async showDataFlows(dataFlows: DataFlowPaths): Promise<void> {
+    await this.dataFlowPathsView.showDataFlows(dataFlows);
   }
 }

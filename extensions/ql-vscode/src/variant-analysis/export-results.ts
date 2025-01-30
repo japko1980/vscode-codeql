@@ -1,56 +1,30 @@
 import { join } from "path";
 import { ensureDir, writeFile } from "fs-extra";
 
+import type { CancellationToken } from "vscode";
+import { Uri, ViewColumn, window, workspace } from "vscode";
+import type { ProgressCallback } from "../common/vscode/progress";
 import {
-  CancellationToken,
-  commands,
-  Uri,
-  ViewColumn,
-  window,
-  workspace,
-} from "vscode";
-import { ProgressCallback, UserCancellationException } from "../commandRunner";
-import { showInformationMessageWithAction } from "../helpers";
-import { extLogger } from "../common";
-import { QueryHistoryManager } from "../query-history/query-history-manager";
+  UserCancellationException,
+  withProgress,
+} from "../common/vscode/progress";
+import { showInformationMessageWithAction } from "../common/vscode/dialog";
+import { extLogger } from "../common/logging/vscode";
 import { createGist } from "./gh-api/gh-api-client";
-import {
-  generateVariantAnalysisMarkdown,
-  MarkdownFile,
-  RepositorySummary,
-} from "./markdown-generation";
-import { pluralize } from "../pure/word";
-import { VariantAnalysisManager } from "./variant-analysis-manager";
-import {
+import type { MarkdownFile, RepositorySummary } from "./markdown-generation";
+import { generateVariantAnalysisMarkdown } from "./markdown-generation";
+import { pluralize } from "../common/word";
+import type { VariantAnalysisManager } from "./variant-analysis-manager";
+import type {
   VariantAnalysis,
   VariantAnalysisScannedRepository,
-  VariantAnalysisScannedRepositoryDownloadStatus,
   VariantAnalysisScannedRepositoryResult,
 } from "./shared/variant-analysis";
-import {
-  filterAndSortRepositoriesWithResults,
-  RepositoriesFilterSortStateWithIds,
-} from "../pure/variant-analysis-filter-sort";
-import { Credentials } from "../common/authentication";
-
-/**
- * Exports the results of the currently-selected variant analysis.
- */
-export async function exportSelectedVariantAnalysisResults(
-  queryHistoryManager: QueryHistoryManager,
-): Promise<void> {
-  const queryHistoryItem = queryHistoryManager.getCurrentQueryHistoryItem();
-  if (!queryHistoryItem || queryHistoryItem.t !== "variant-analysis") {
-    throw new Error(
-      "No variant analysis results currently open. To open results, click an item in the query history view.",
-    );
-  }
-
-  return commands.executeCommand(
-    "codeQL.exportVariantAnalysisResults",
-    queryHistoryItem.variantAnalysis.id,
-  );
-}
+import { VariantAnalysisScannedRepositoryDownloadStatus } from "./shared/variant-analysis";
+import type { RepositoriesFilterSortStateWithIds } from "./shared/variant-analysis-filter-sort";
+import { filterAndSortRepositoriesWithResults } from "./shared/variant-analysis-filter-sort";
+import type { Credentials } from "../common/authentication";
+import type { AppCommandManager } from "../common/commands";
 
 const MAX_VARIANT_ANALYSIS_EXPORT_PROGRESS_STEPS = 2;
 
@@ -62,113 +36,122 @@ export async function exportVariantAnalysisResults(
   variantAnalysisManager: VariantAnalysisManager,
   variantAnalysisId: number,
   filterSort: RepositoriesFilterSortStateWithIds | undefined,
+  commandManager: AppCommandManager,
   credentials: Credentials,
-  progress: ProgressCallback,
-  token: CancellationToken,
 ): Promise<void> {
-  const variantAnalysis = await variantAnalysisManager.getVariantAnalysis(
-    variantAnalysisId,
-  );
-  if (!variantAnalysis) {
-    void extLogger.log(
-      `Could not find variant analysis with id ${variantAnalysisId}`,
-    );
-    throw new Error(
-      "There was an error when trying to retrieve variant analysis information",
-    );
-  }
+  await withProgress(
+    async (progress: ProgressCallback, token: CancellationToken) => {
+      const variantAnalysis =
+        variantAnalysisManager.tryGetVariantAnalysis(variantAnalysisId);
+      if (!variantAnalysis) {
+        void extLogger.log(
+          `Could not find variant analysis with id ${variantAnalysisId}`,
+        );
+        throw new Error(
+          "There was an error when trying to retrieve variant analysis information",
+        );
+      }
 
-  if (token.isCancellationRequested) {
-    throw new UserCancellationException("Cancelled");
-  }
+      if (token.isCancellationRequested) {
+        throw new UserCancellationException("Cancelled");
+      }
 
-  const repoStates = await variantAnalysisManager.getRepoStates(
-    variantAnalysisId,
-  );
+      const repoStates =
+        variantAnalysisManager.getRepoStates(variantAnalysisId);
 
-  void extLogger.log(
-    `Exporting variant analysis results for variant analysis with id ${variantAnalysis.id}`,
-  );
-
-  progress({
-    maxStep: MAX_VARIANT_ANALYSIS_EXPORT_PROGRESS_STEPS,
-    step: 0,
-    message: "Determining export format",
-  });
-
-  const exportFormat = await determineExportFormat();
-  if (!exportFormat) {
-    return;
-  }
-
-  if (token.isCancellationRequested) {
-    throw new UserCancellationException("Cancelled");
-  }
-
-  const repositories = filterAndSortRepositoriesWithResults(
-    variantAnalysis.scannedRepos,
-    filterSort,
-  )?.filter(
-    (repo) =>
-      repo.resultCount &&
-      repoStates.find((r) => r.repositoryId === repo.repository.id)
-        ?.downloadStatus ===
-        VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-  );
-
-  async function* getAnalysesResults(): AsyncGenerator<
-    [VariantAnalysisScannedRepository, VariantAnalysisScannedRepositoryResult]
-  > {
-    if (!variantAnalysis) {
-      return;
-    }
-
-    if (!repositories) {
-      return;
-    }
-
-    for (const repo of repositories) {
-      const result = await variantAnalysisManager.loadResults(
-        variantAnalysis.id,
-        repo.repository.fullName,
-        {
-          skipCacheStore: true,
-        },
+      void extLogger.log(
+        `Exporting variant analysis results for variant analysis with id ${variantAnalysis.id}`,
       );
 
-      yield [repo, result];
-    }
-  }
+      progress({
+        maxStep: MAX_VARIANT_ANALYSIS_EXPORT_PROGRESS_STEPS,
+        step: 0,
+        message: "Determining export format",
+      });
 
-  const exportDirectory =
-    variantAnalysisManager.getVariantAnalysisStorageLocation(
-      variantAnalysis.id,
-    );
+      const exportFormat = await determineExportFormat();
+      if (!exportFormat) {
+        return;
+      }
 
-  // The date will be formatted like the following: 20221115T123456Z. The time is in UTC.
-  const formattedDate = new Date()
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d+Z$/, "Z");
-  const exportedResultsDirectory = join(
-    exportDirectory,
-    "exported-results",
-    `results_${formattedDate}`,
-  );
+      if (token.isCancellationRequested) {
+        throw new UserCancellationException("Cancelled");
+      }
 
-  await exportVariantAnalysisAnalysisResults(
-    exportedResultsDirectory,
-    variantAnalysis,
-    getAnalysesResults(),
-    repositories?.length ?? 0,
-    exportFormat,
-    credentials,
-    progress,
-    token,
+      const repositories = filterAndSortRepositoriesWithResults(
+        variantAnalysis.scannedRepos,
+        filterSort,
+      )?.filter(
+        (repo) =>
+          repo.resultCount &&
+          repoStates.find((r) => r.repositoryId === repo.repository.id)
+            ?.downloadStatus ===
+            VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+      );
+
+      async function* getAnalysesResults(): AsyncGenerator<
+        [
+          VariantAnalysisScannedRepository,
+          VariantAnalysisScannedRepositoryResult,
+        ]
+      > {
+        if (!variantAnalysis) {
+          return;
+        }
+
+        if (!repositories) {
+          return;
+        }
+
+        for (const repo of repositories) {
+          const result = await variantAnalysisManager.loadResults(
+            variantAnalysis.id,
+            repo.repository.fullName,
+            {
+              skipCacheStore: true,
+            },
+          );
+
+          yield [repo, result];
+        }
+      }
+
+      const exportDirectory =
+        variantAnalysisManager.getVariantAnalysisStorageLocation(
+          variantAnalysis.id,
+        );
+
+      // The date will be formatted like the following: 20221115T123456Z. The time is in UTC.
+      const formattedDate = new Date()
+        .toISOString()
+        .replace(/[-:]/g, "")
+        .replace(/\.\d+Z$/, "Z");
+      const exportedResultsDirectory = join(
+        exportDirectory,
+        "exported-results",
+        `results_${formattedDate}`,
+      );
+
+      await exportVariantAnalysisAnalysisResults(
+        exportedResultsDirectory,
+        variantAnalysis,
+        getAnalysesResults(),
+        repositories?.length ?? 0,
+        exportFormat,
+        commandManager,
+        credentials,
+        progress,
+        token,
+      );
+    },
+    {
+      title: "Exporting variant analysis results",
+      cancellable: true,
+    },
   );
 }
 
-export async function exportVariantAnalysisAnalysisResults(
+async function exportVariantAnalysisAnalysisResults(
   exportedResultsPath: string,
   variantAnalysis: VariantAnalysis,
   analysesResults: AsyncIterable<
@@ -176,6 +159,7 @@ export async function exportVariantAnalysisAnalysisResults(
   >,
   expectedAnalysesResultsCount: number,
   exportFormat: "gist" | "local",
+  commandManager: AppCommandManager,
   credentials: Credentials,
   progress: ProgressCallback,
   token: CancellationToken,
@@ -206,6 +190,7 @@ export async function exportVariantAnalysisAnalysisResults(
     description,
     markdownFiles,
     exportFormat,
+    commandManager,
     credentials,
     progress,
     token,
@@ -245,11 +230,12 @@ async function determineExportFormat(): Promise<"gist" | "local" | undefined> {
   return undefined;
 }
 
-export async function exportResults(
+async function exportResults(
   exportedResultsPath: string,
   description: string,
   markdownFiles: MarkdownFile[],
   exportFormat: "gist" | "local",
+  commandManager: AppCommandManager,
   credentials: Credentials,
   progress?: ProgressCallback,
   token?: CancellationToken,
@@ -262,6 +248,7 @@ export async function exportResults(
     await exportToGist(
       description,
       markdownFiles,
+      commandManager,
       credentials,
       progress,
       token,
@@ -270,15 +257,17 @@ export async function exportResults(
     await exportToLocalMarkdown(
       exportedResultsPath,
       markdownFiles,
+      commandManager,
       progress,
       token,
     );
   }
 }
 
-export async function exportToGist(
+async function exportToGist(
   description: string,
   markdownFiles: MarkdownFile[],
+  commandManager: AppCommandManager,
   credentials: Credentials,
   progress?: ProgressCallback,
   token?: CancellationToken,
@@ -294,10 +283,13 @@ export async function exportToGist(
   }
 
   // Convert markdownFiles to the appropriate format for uploading to gist
-  const gistFiles = markdownFiles.reduce((acc, cur) => {
-    acc[`${cur.fileName}.md`] = { content: cur.content.join("\n") };
-    return acc;
-  }, {} as { [key: string]: { content: string } });
+  const gistFiles = markdownFiles.reduce(
+    (acc, cur) => {
+      acc[`${cur.fileName}.md`] = { content: cur.content.join("\n") };
+      return acc;
+    },
+    {} as { [key: string]: { content: string } },
+  );
 
   const gistUrl = await createGist(credentials, description, gistFiles);
   if (gistUrl) {
@@ -310,7 +302,7 @@ export async function exportToGist(
       if (!shouldOpenGist) {
         return;
       }
-      return commands.executeCommand("vscode.open", Uri.parse(gistUrl));
+      return commandManager.execute("vscode.open", Uri.parse(gistUrl));
     });
   }
 }
@@ -332,7 +324,7 @@ const buildVariantAnalysisGistDescription = (
   const repositoryLabel = summaries.length
     ? `(${pluralize(summaries.length, "repository", "repositories")})`
     : "";
-  return `${variantAnalysis.query.name} (${variantAnalysis.query.language}) ${resultLabel} ${repositoryLabel}`;
+  return `${variantAnalysis.query.name} (${variantAnalysis.language}) ${resultLabel} ${repositoryLabel}`;
 };
 
 /**
@@ -341,6 +333,7 @@ const buildVariantAnalysisGistDescription = (
 async function exportToLocalMarkdown(
   exportedResultsPath: string,
   markdownFiles: MarkdownFile[],
+  commandManager: AppCommandManager,
   progress?: ProgressCallback,
   token?: CancellationToken,
 ) {
@@ -363,7 +356,7 @@ async function exportToLocalMarkdown(
   // This needs to use .then to ensure we aren't keeping the progress notification open. We shouldn't await the
   // "Open exported results" button click.
   void showInformationMessageWithAction(
-    `Variant analysis results exported to \"${exportedResultsPath}\".`,
+    `Variant analysis results exported to "${exportedResultsPath}".`,
     "Open exported results",
   ).then(async (shouldOpenExportedResults) => {
     if (!shouldOpenExportedResults) {
@@ -373,6 +366,6 @@ async function exportToLocalMarkdown(
     const summaryFilePath = join(exportedResultsPath, "_summary.md");
     const summaryFile = await workspace.openTextDocument(summaryFilePath);
     await window.showTextDocument(summaryFile, ViewColumn.One);
-    await commands.executeCommand("revealFileInOS", Uri.file(summaryFilePath));
+    await commandManager.execute("revealFileInOS", Uri.file(summaryFilePath));
   });
 }

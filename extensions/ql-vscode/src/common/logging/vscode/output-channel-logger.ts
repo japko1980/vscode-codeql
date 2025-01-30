@@ -1,18 +1,17 @@
-import { window as Window, OutputChannel, Progress } from "vscode";
-import { ensureFile, appendFile } from "fs-extra";
-import { isAbsolute } from "path";
-import { Logger, LogOptions } from "../logger";
-import { DisposableObject } from "../../../pure/disposable-object";
+import type { OutputChannel, Progress } from "vscode";
+import { window as Window } from "vscode";
+import type { Logger, LogOptions } from "../logger";
+import { DisposableObject } from "../../disposable-object";
+import type { NotificationLogger } from "../notification-logger";
 
 /**
  * A logger that writes messages to an output channel in the VS Code Output tab.
  */
-export class OutputChannelLogger extends DisposableObject implements Logger {
+export class OutputChannelLogger
+  extends DisposableObject
+  implements Logger, NotificationLogger
+{
   public readonly outputChannel: OutputChannel;
-  private readonly additionalLocations = new Map<
-    string,
-    AdditionalLogLocation
-  >();
   isCustomLogDirectory: boolean;
 
   constructor(title: string) {
@@ -32,27 +31,6 @@ export class OutputChannelLogger extends DisposableObject implements Logger {
       } else {
         this.outputChannel.append(message);
       }
-
-      if (options.additionalLogLocation) {
-        if (!isAbsolute(options.additionalLogLocation)) {
-          throw new Error(
-            `Additional Log Location must be an absolute path: ${options.additionalLogLocation}`,
-          );
-        }
-        const logPath = options.additionalLogLocation;
-        let additional = this.additionalLocations.get(logPath);
-        if (!additional) {
-          const msg = `| Log being saved to ${logPath} |`;
-          const separator = new Array(msg.length).fill("-").join("");
-          this.outputChannel.appendLine(separator);
-          this.outputChannel.appendLine(msg);
-          this.outputChannel.appendLine(separator);
-          additional = new AdditionalLogLocation(logPath);
-          this.additionalLocations.set(logPath, additional);
-        }
-
-        await additional.log(message, options);
-      }
     } catch (e) {
       if (e instanceof Error && e.message === "Channel has been closed") {
         // Output channel is closed logging to console instead
@@ -70,29 +48,28 @@ export class OutputChannelLogger extends DisposableObject implements Logger {
     this.outputChannel.show(preserveFocus);
   }
 
-  removeAdditionalLogLocation(location: string | undefined): void {
-    if (location) {
-      this.additionalLocations.delete(location);
-    }
+  async showErrorMessage(message: string): Promise<void> {
+    await this.showMessage(message, Window.showErrorMessage);
   }
-}
 
-class AdditionalLogLocation {
-  constructor(private location: string) {}
+  async showInformationMessage(message: string): Promise<void> {
+    await this.showMessage(message, Window.showInformationMessage);
+  }
 
-  async log(message: string, options = {} as LogOptions): Promise<void> {
-    if (options.trailingNewline === undefined) {
-      options.trailingNewline = true;
+  async showWarningMessage(message: string): Promise<void> {
+    await this.showMessage(message, Window.showWarningMessage);
+  }
+
+  private async showMessage(
+    message: string,
+    show: (message: string, ...items: string[]) => Thenable<string | undefined>,
+  ): Promise<void> {
+    const label = "View extension logs";
+    const result = await show(message, label);
+
+    if (result === label) {
+      this.show();
     }
-    await ensureFile(this.location);
-
-    await appendFile(
-      this.location,
-      message + (options.trailingNewline ? "\n" : ""),
-      {
-        encoding: "utf8",
-      },
-    );
   }
 }
 

@@ -1,14 +1,14 @@
-import * as React from "react";
-import { ChangeEvent, useCallback, useEffect, useState } from "react";
-import styled from "styled-components";
+import type { ChangeEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { styled } from "styled-components";
 import { VSCodeBadge, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react";
+import type { VariantAnalysisScannedRepositoryState } from "../../variant-analysis/shared/variant-analysis";
 import {
   isCompletedAnalysisRepoStatus,
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepositoryDownloadStatus,
-  VariantAnalysisScannedRepositoryState,
 } from "../../variant-analysis/shared/variant-analysis";
-import { formatDecimal } from "../../pure/number";
+import { formatDecimal } from "../../common/number";
 import {
   Codicon,
   ErrorIcon,
@@ -16,17 +16,17 @@ import {
   SuccessIcon,
   WarningIcon,
 } from "../common";
-import { RepositoryWithMetadata } from "../../variant-analysis/shared/repository";
-import {
+import type { RepositoryWithMetadata } from "../../variant-analysis/shared/repository";
+import type {
   AnalysisAlert,
   AnalysisRawResults,
 } from "../../variant-analysis/shared/analysis-result";
 import { vscode } from "../vscode-api";
 import { AnalyzedRepoItemContent } from "./AnalyzedRepoItemContent";
 import StarCount from "../common/StarCount";
-import { LastUpdated } from "../common/LastUpdated";
 import { useTelemetryOnChange } from "../common/telemetry";
 import { DeterminateProgressRing } from "../common/DeterminateProgressRing";
+import { ResultFormat } from "../../variant-analysis/shared/variant-analysis-result-format";
 
 // This will ensure that these icons have a className which we can use in the TitleContainer
 const ExpandCollapseCodicon = styled(Codicon)``;
@@ -99,6 +99,8 @@ export type RepoRowProps = {
   interpretedResults?: AnalysisAlert[];
   rawResults?: AnalysisRawResults;
 
+  resultFormat?: ResultFormat;
+
   selected?: boolean;
   onSelectedChange?: (repositoryId: number, selected: boolean) => void;
 };
@@ -169,6 +171,7 @@ export const RepoRow = ({
   resultCount,
   interpretedResults,
   rawResults,
+  resultFormat = ResultFormat.Alerts,
   selected,
   onSelectedChange,
 }: RepoRowProps) => {
@@ -297,7 +300,6 @@ export const RepoRow = ({
           <div>
             <StarCount starCount={repository.stargazersCount} />
           </div>
-          <LastUpdated lastUpdated={repository.updatedAt} />
         </MetadataContainer>
       </TitleContainer>
       {isExpanded && expandableContentLoaded && (
@@ -306,6 +308,7 @@ export const RepoRow = ({
           downloadStatus={downloadState?.downloadStatus}
           interpretedResults={interpretedResults}
           rawResults={rawResults}
+          resultFormat={resultFormat}
         />
       )}
     </div>

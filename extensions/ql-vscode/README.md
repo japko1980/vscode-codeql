@@ -9,16 +9,16 @@ This project is an extension for Visual Studio Code that adds rich language supp
 
 To see what has changed in the last few versions of the extension, see the [Changelog](https://github.com/github/vscode-codeql/blob/main/extensions/ql-vscode/CHANGELOG.md).
 
+You can also read full documentation for the extension on the [GitHub documentation website](https://docs.github.com/code-security/codeql-for-vs-code/using-the-advanced-functionality-of-the-codeql-for-vs-code-extension).
+
 ## Quick start overview
 
 The information in this `README` file describes the quickest way to start using CodeQL.
-For information about other configurations, see the separate [CodeQL help](https://codeql.github.com/docs/codeql-for-visual-studio-code/).
+For information about other configurations, see "[Using the advanced functionality of the CodeQL for VS Code extension](https://docs.github.com/code-security/codeql-for-vs-code/using-the-advanced-functionality-of-the-codeql-for-vs-code-extension)" in the GitHub documentation.
 
 ### Quick start: Installing and configuring the extension
 
 1. [Install the extension](#installing-the-extension).  
-   *Note: vscode-codeql installs the following dependencies for required functionality: [Test Adapter Converter](https://marketplace.visualstudio.com/items?itemName=ms-vscode.test-adapter-converter), [Test Explorer UI](https://marketplace.visualstudio.com/items?itemName=hbenl.vscode-test-explorer).*
-
 1. [Check access to the CodeQL CLI](#checking-access-to-the-codeql-cli).
 1. [Clone the CodeQL starter workspace](#cloning-the-codeql-starter-workspace).
 
@@ -28,7 +28,7 @@ For information about other configurations, see the separate [CodeQL help](https
 1. [Run a query](#running-a-query).
 
 ---
-
+<!-- markdownlint-disable-next-line MD024 -->
 ## Quick start: Installing and configuring the extension
 
 ### Installing the extension
@@ -44,7 +44,7 @@ The CodeQL extension requires a minimum of Visual Studio Code 1.39. Older versio
 
 The extension uses the [CodeQL CLI](https://codeql.github.com/docs/codeql-cli/) to compile and run queries. The extension automatically manages access to the CLI for you by default (recommended). To check for updates to the CodeQL CLI, you can use the **CodeQL: Check for CLI Updates** command.
 
-If you want to override the default behavior and use a CodeQL CLI that's already on your machine, see [Configuring access to the CodeQL CLI](https://codeql.github.com/docs/codeql-for-visual-studio-code/setting-up-codeql-in-visual-studio-code/#configuring-access-to-the-codeql-cli).
+If you want to override the default behavior and use a CodeQL CLI that's already on your machine, see "[Configuring access to the CodeQL CLI](https://docs.github.com/code-security/codeql-for-vs-code/using-the-advanced-functionality-of-the-codeql-for-vs-code-extension/configuring-access-to-the-codeql-cli)" in the GitHub documentation.
 
 If you have any difficulty with CodeQL CLI access, see the **CodeQL Extension Log** in the **Output** view for any error messages.
 
@@ -54,7 +54,7 @@ When you're working with CodeQL, you need access to the standard CodeQL librarie
 Initially, we recommend that you clone and use the ready-to-use [starter workspace](https://github.com/github/vscode-codeql-starter/).
 This includes libraries and queries for the main supported languages, with folders set up ready for your custom queries. After cloning the workspace (use `git clone --recursive`), you can use it in the same way as any other VS Code workspace—with the added advantage that you can easily update the CodeQL libraries.
 
-For information about configuring an existing workspace for CodeQL, [see the documentation](https://codeql.github.com/docs/codeql-for-visual-studio-code/setting-up-codeql-in-visual-studio-code/#updating-an-existing-workspace-for-codeql).
+For information about configuring an existing workspace for CodeQL, see "[Setting up a CodeQL workspace](https://docs.github.com/code-security/codeql-for-vs-code/using-the-advanced-functionality-of-the-codeql-for-vs-code-extension/setting-up-a-codeql-workspace#option-2-updating-an-existing-workspace-for-codeql-advanced)" in the GitHub documentation.
 
 ## Upgrading CodeQL standard libraries
 
@@ -71,6 +71,7 @@ in the starter workspace directory.
 
 If you're using your own clone of the CodeQL standard libraries, you can do a `git pull` from where you have the libraries checked out.
 
+<!-- markdownlint-disable-next-line MD024 -->
 ## Quick start: Using CodeQL
 
 You can find all the commands contributed by the extension in the Command Palette (**Ctrl+Shift+P** or **Cmd+Shift+P**) by typing `CodeQL`, many of them are also accessible through the interface, and via keyboard shortcuts.
@@ -86,7 +87,7 @@ While you can use the [CodeQL CLI to create your own databases](https://codeql.g
 1. Select the language for the database you want to download (only required if the project has databases for multiple languages).
 1. Once the CodeQL database has been imported, it is displayed in the Databases view.
 
-For more information, see [Choosing a database](https://codeql.github.com/docs/codeql-for-visual-studio-code/analyzing-your-projects/#choosing-a-database) on codeql.github.com.
+For more information, see "[Managing CodeQL databases](https://docs.github.com/code-security/codeql-for-vs-code/getting-started-with-codeql-for-vs-code/managing-codeql-databases#choosing-a-database-to-analyze)" in the GitHub documentation.
 
 ### Running a query
 
@@ -107,12 +108,12 @@ If you wish to navigate the query results from your keyboard, you can bind short
 
 ## What next?
 
-For more information about the CodeQL extension, [see the documentation](https://codeql.github.com/docs/codeql-for-visual-studio-code/). Otherwise, you could:
+We recommend reading the [full documentation for the extension](https://docs.github.com/code-security/codeql-for-vs-code/) on the GitHub documentation website. You may also find the following resources useful:
 
 - [Create a database for a different codebase](https://codeql.github.com/docs/codeql-cli/creating-codeql-databases/).
-- [Try out variant analysis](https://help.semmle.com/QL/learn-ql/ql-training.html).
+- [Try out variant analysis](https://docs.github.com/code-security/codeql-for-vs-code/getting-started-with-codeql-for-vs-code/running-codeql-queries-at-scale-with-multi-repository-variant-analysis).
 - [Learn more about CodeQL](https://codeql.github.com/docs/).
-- [Read how security researchers use CodeQL to find CVEs](https://securitylab.github.com/research).
+- [Read how security researchers use CodeQL to find CVEs](https://github.blog/tag/github-security-lab/).
 
 ## License
 
@@ -120,4 +121,4 @@ The CodeQL extension for Visual Studio Code is [licensed](LICENSE.md) under the 
 
 ## Data and Telemetry
 
-If you specifically opt-in to permit GitHub to do so, GitHub will collect usage data and metrics for the purposes of helping the core developers to improve the CodeQL extension for VS Code. This data will not be shared with any parties outside of GitHub. IP addresses and installation IDs will be retained for a maximum of 30 days. Anonymous data will be retained for a maximum of 180 days. For more information about telemetry, [see the documentation](https://codeql.github.com/docs/codeql-for-visual-studio-code/about-telemetry-in-codeql-for-visual-studio-code).
+If you specifically opt-in to permit GitHub to do so, GitHub will collect usage data and metrics for the purposes of helping the core developers to improve the CodeQL extension for VS Code. This data will not be shared with any parties outside of GitHub. IP addresses and installation IDs will be retained for a maximum of 30 days. Anonymous data will be retained for a maximum of 180 days. For more information, see "[Telemetry in CodeQL for Visual Studio Code](https://docs.github.com/code-security/codeql-for-vs-code/using-the-advanced-functionality-of-the-codeql-for-vs-code-extension/telemetry-in-codeql-for-visual-studio-code)" in the GitHub documentation.

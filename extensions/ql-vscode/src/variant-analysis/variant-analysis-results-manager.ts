@@ -1,22 +1,28 @@
-import { appendFile, pathExists, mkdir, outputJson, readJson } from "fs-extra";
-import fetch from "node-fetch";
+import { appendFile, pathExists, rm } from "fs-extra";
 import { EOL } from "os";
 import { join } from "path";
 
-import { Logger } from "../common";
-import { AnalysisAlert, AnalysisRawResults } from "./shared/analysis-result";
-import { sarifParser } from "../sarif-parser";
+import type { Logger } from "../common/logging";
+import type {
+  AnalysisAlert,
+  AnalysisRawResults,
+} from "./shared/analysis-result";
+import { sarifParser } from "../common/sarif-parser";
 import { extractAnalysisAlerts } from "./sarif-processing";
-import { CodeQLCliServer } from "../cli";
+import type { CodeQLCliServer } from "../codeql-cli/cli";
 import { extractRawResults } from "./bqrs-processing";
-import {
+import { VariantAnalysisRepoStatus } from "./shared/variant-analysis";
+import type {
   VariantAnalysis,
   VariantAnalysisRepositoryTask,
   VariantAnalysisScannedRepositoryResult,
 } from "./shared/variant-analysis";
-import { DisposableObject, DisposeHandler } from "../pure/disposable-object";
+import type { DisposeHandler } from "../common/disposable-object";
+import { DisposableObject } from "../common/disposable-object";
 import { EventEmitter } from "vscode";
-import { unzipFile } from "../pure/zip";
+import { unzipToDirectoryConcurrently } from "../common/unzip-concurrently";
+import { readRepoTask, writeRepoTask } from "./repo-tasks-store";
+import type { VariantAnalysisConfig } from "../config";
 
 type CacheKey = `${number}/${string}`;
 
@@ -25,7 +31,7 @@ const createCacheKey = (
   repositoryFullName: string,
 ): CacheKey => `${variantAnalysisId}/${repositoryFullName}`;
 
-export type ResultDownloadedEvent = {
+type ResultDownloadedEvent = {
   variantAnalysisId: number;
   repoTask: VariantAnalysisRepositoryTask;
 };
@@ -37,7 +43,6 @@ export type LoadResultsOptions = {
 };
 
 export class VariantAnalysisResultsManager extends DisposableObject {
-  private static readonly REPO_TASK_FILENAME = "repo_task.json";
   private static readonly RESULTS_DIRECTORY = "results";
 
   private readonly cachedResults: Map<
@@ -57,6 +62,7 @@ export class VariantAnalysisResultsManager extends DisposableObject {
 
   constructor(
     private readonly cliServer: CodeQLCliServer,
+    private readonly config: VariantAnalysisConfig,
     private readonly logger: Logger,
   ) {
     super();
@@ -78,26 +84,32 @@ export class VariantAnalysisResultsManager extends DisposableObject {
       repoTask.repository.fullName,
     );
 
-    if (!(await pathExists(resultDirectory))) {
-      await mkdir(resultDirectory, { recursive: true });
-    }
-
-    await outputJson(
-      join(resultDirectory, VariantAnalysisResultsManager.REPO_TASK_FILENAME),
-      repoTask,
-    );
+    await writeRepoTask(resultDirectory, repoTask);
 
     const zipFilePath = join(resultDirectory, "results.zip");
 
+    // in case of restarted download delete possible artifact from previous download
+    await rm(zipFilePath, { force: true });
+
     const response = await fetch(repoTask.artifactUrl);
 
-    let responseSize = parseInt(response.headers.get("content-length") || "0");
-    if (responseSize === 0 && response.size > 0) {
-      responseSize = response.size;
+    const responseSize = parseInt(
+      response.headers.get("content-length") || "1",
+    );
+
+    if (!response.body) {
+      throw new Error("No response body found");
     }
 
+    const reader = response.body.getReader();
+
     let amountDownloaded = 0;
-    for await (const chunk of response.body) {
+    for (;;) {
+      const { value: chunk, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
       await appendFile(zipFilePath, Buffer.from(chunk));
       amountDownloaded += chunk.length;
       await onDownloadPercentageChanged(
@@ -110,7 +122,7 @@ export class VariantAnalysisResultsManager extends DisposableObject {
       VariantAnalysisResultsManager.RESULTS_DIRECTORY,
     );
 
-    await unzipFile(zipFilePath, unzippedFilesDirectory);
+    await unzipToDirectoryConcurrently(zipFilePath, unzippedFilesDirectory);
 
     this._onResultDownloaded.fire({
       variantAnalysisId,
@@ -184,15 +196,14 @@ export class VariantAnalysisResultsManager extends DisposableObject {
       repositoryFullName,
     );
 
-    const repoTask: VariantAnalysisRepositoryTask = await readJson(
-      join(storageDirectory, VariantAnalysisResultsManager.REPO_TASK_FILENAME),
-    );
+    const repoTask: VariantAnalysisRepositoryTask =
+      await readRepoTask(storageDirectory);
 
     if (!repoTask.databaseCommitSha || !repoTask.sourceLocationPrefix) {
       throw new Error("Missing database commit SHA");
     }
 
-    const fileLinkPrefix = this.createGitHubDotcomFileLinkPrefix(
+    const fileLinkPrefix = this.createGitHubFileLinkPrefix(
       repoTask.repository.fullName,
       repoTask.databaseCommitSha,
     );
@@ -203,34 +214,35 @@ export class VariantAnalysisResultsManager extends DisposableObject {
     );
     const sarifPath = join(resultsDirectory, "results.sarif");
     const bqrsPath = join(resultsDirectory, "results.bqrs");
+
+    let interpretedResults: AnalysisAlert[] | undefined;
+    let rawResults: AnalysisRawResults | undefined;
+
     if (await pathExists(sarifPath)) {
-      const interpretedResults = await this.readSarifResults(
+      interpretedResults = await this.readSarifResults(
         sarifPath,
         fileLinkPrefix,
       );
-
-      return {
-        variantAnalysisId,
-        repositoryId: repoTask.repository.id,
-        interpretedResults,
-      };
     }
 
     if (await pathExists(bqrsPath)) {
-      const rawResults = await this.readBqrsResults(
+      rawResults = await this.readBqrsResults(
         bqrsPath,
         fileLinkPrefix,
         repoTask.sourceLocationPrefix,
       );
-
-      return {
-        variantAnalysisId,
-        repositoryId: repoTask.repository.id,
-        rawResults,
-      };
     }
 
-    throw new Error("Missing results file");
+    if (!interpretedResults && !rawResults) {
+      throw new Error("Missing results file");
+    }
+
+    return {
+      variantAnalysisId,
+      repositoryId: repoTask.repository.id,
+      interpretedResults,
+      rawResults,
+    };
   }
 
   public async isVariantAnalysisRepoDownloaded(
@@ -282,11 +294,11 @@ export class VariantAnalysisResultsManager extends DisposableObject {
     return join(variantAnalysisStoragePath, fullName);
   }
 
-  private createGitHubDotcomFileLinkPrefix(
-    fullName: string,
-    sha: string,
-  ): string {
-    return `https://github.com/${fullName}/blob/${sha}`;
+  private createGitHubFileLinkPrefix(fullName: string, sha: string): string {
+    return new URL(
+      `/${fullName}/blob/${sha}`,
+      this.config.githubUrl,
+    ).toString();
   }
 
   public removeAnalysisResults(variantAnalysis: VariantAnalysis) {
@@ -303,6 +315,28 @@ export class VariantAnalysisResultsManager extends DisposableObject {
         }
       });
     }
+  }
+
+  public getLoadedResultsForVariantAnalysis(
+    variantAnalysis: VariantAnalysis,
+  ): VariantAnalysisScannedRepositoryResult[] {
+    const scannedRepos = variantAnalysis.scannedRepos?.filter(
+      (r) => r.analysisStatus === VariantAnalysisRepoStatus.Succeeded,
+    );
+
+    if (!scannedRepos) {
+      return [];
+    }
+
+    return scannedRepos
+      .map((scannedRepo) =>
+        this.cachedResults.get(
+          createCacheKey(variantAnalysis.id, scannedRepo.repository.fullName),
+        ),
+      )
+      .filter(
+        (r): r is VariantAnalysisScannedRepositoryResult => r !== undefined,
+      );
   }
 
   public dispose(disposeHandler?: DisposeHandler) {

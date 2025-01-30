@@ -1,14 +1,12 @@
 import { Diagnostic, DiagnosticSeverity, languages, Range, Uri } from "vscode";
-import { DisposableObject } from "../pure/disposable-object";
-import { QueryHistoryInfo } from "../query-history/query-history-info";
-import {
-  EvaluationLogProblemReporter,
-  EvaluationLogScannerSet,
-} from "./log-scanner";
-import { PipelineInfo, SummarySymbols } from "./summary-parser";
+import { DisposableObject } from "../common/disposable-object";
+import type { QueryHistoryInfo } from "../query-history/query-history-info";
+import type { EvaluationLogProblemReporter } from "./log-scanner";
+import { EvaluationLogScannerSet } from "./log-scanner";
+import type { PipelineInfo, SummarySymbols } from "./summary-parser";
 import { readFile } from "fs-extra";
-import { extLogger } from "../common";
-import { QueryHistoryManager } from "../query-history/query-history-manager";
+import { extLogger } from "../common/logging/vscode";
+import type { QueryHistoryManager } from "../query-history/query-history-manager";
 
 /**
  * Compute the key used to find a predicate in the summary symbols.
@@ -96,19 +94,19 @@ export class LogScannerService extends DisposableObject {
   public async scanEvalLog(query: QueryHistoryInfo | undefined): Promise<void> {
     this.diagnosticCollection.clear();
 
-    if (
-      query?.t !== "local" ||
-      query.evalLogSummaryLocation === undefined ||
-      query.jsonEvalLogSummaryLocation === undefined
-    ) {
+    if (query?.t !== "local" || query.evaluatorLogPaths === undefined) {
       return;
     }
 
-    const diagnostics = await this.scanLog(
-      query.jsonEvalLogSummaryLocation,
-      query.evalLogSummarySymbolsLocation,
-    );
-    const uri = Uri.file(query.evalLogSummaryLocation);
+    const { summarySymbols, jsonSummary, humanReadableSummary } =
+      query.evaluatorLogPaths;
+
+    if (jsonSummary === undefined || humanReadableSummary === undefined) {
+      return;
+    }
+
+    const diagnostics = await this.scanLog(jsonSummary, summarySymbols);
+    const uri = Uri.file(humanReadableSummary);
     this.diagnosticCollection.set(uri, diagnostics);
   }
 

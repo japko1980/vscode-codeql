@@ -1,19 +1,13 @@
-import { App } from "../common/app";
-import { AppEvent, AppEventEmitter } from "../common/events";
+import type { App } from "../common/app";
+import type { AppEvent, AppEventEmitter } from "../common/events";
 import { ValueResult } from "../common/value-result";
-import { DbConfigStore } from "./config/db-config-store";
-import {
-  DbItem,
-  DbItemKind,
-  DbListKind,
-  LocalDatabaseDbItem,
-  LocalListDbItem,
-  RemoteUserDefinedListDbItem,
-} from "./db-item";
+import { DisposableObject } from "../common/disposable-object";
+import type { DbConfigStore } from "./config/db-config-store";
+import type { DbItem, RemoteUserDefinedListDbItem } from "./db-item";
+import type { ExpandedDbItem } from "./db-item-expansion";
 import {
   updateExpandedItem,
   replaceExpandedItem,
-  ExpandedDbItem,
   cleanNonExistentExpandedItems,
 } from "./db-item-expansion";
 import {
@@ -21,9 +15,10 @@ import {
   mapDbItemToSelectedDbItem,
 } from "./db-item-selection";
 import { createRemoteTree } from "./db-tree-creator";
-import { DbConfigValidationError } from "./db-validation-errors";
+import type { DbConfigValidationError } from "./db-validation-errors";
+import type { VariantAnalysisConfig } from "../config";
 
-export class DbManager {
+export class DbManager extends DisposableObject {
   public readonly onDbItemsChanged: AppEvent<void>;
   public static readonly DB_EXPANDED_STATE_KEY = "db_expanded";
   private readonly onDbItemsChangesEventEmitter: AppEventEmitter<void>;
@@ -31,11 +26,20 @@ export class DbManager {
   constructor(
     private readonly app: App,
     private readonly dbConfigStore: DbConfigStore,
+    private readonly variantAnalysisConfigListener: VariantAnalysisConfig,
   ) {
-    this.onDbItemsChangesEventEmitter = app.createEventEmitter<void>();
+    super();
+
+    this.onDbItemsChangesEventEmitter = this.push(
+      app.createEventEmitter<void>(),
+    );
     this.onDbItemsChanged = this.onDbItemsChangesEventEmitter.event;
 
     this.dbConfigStore.onDidChangeConfig(() => {
+      this.onDbItemsChangesEventEmitter.fire();
+    });
+
+    this.variantAnalysisConfigListener.onDidChangeConfiguration?.(() => {
       this.onDbItemsChangesEventEmitter.fire();
     });
   }
@@ -58,7 +62,11 @@ export class DbManager {
 
     const expandedItems = this.getExpandedItems();
 
-    const remoteTree = createRemoteTree(configResult.value, expandedItems);
+    const remoteTree = createRemoteTree(
+      configResult.value,
+      this.variantAnalysisConfigListener,
+      expandedItems,
+    );
     return ValueResult.ok(remoteTree.children);
   }
 
@@ -100,35 +108,26 @@ export class DbManager {
     await this.dbConfigStore.addRemoteRepo(nwo, parentList);
   }
 
+  public async addNewRemoteReposToList(
+    nwoList: string[],
+    parentList: string,
+  ): Promise<void> {
+    await this.dbConfigStore.addRemoteReposToList(nwoList, parentList);
+  }
+
   public async addNewRemoteOwner(owner: string): Promise<void> {
     await this.dbConfigStore.addRemoteOwner(owner);
   }
 
-  public async addNewList(
-    listKind: DbListKind,
-    listName: string,
-  ): Promise<void> {
-    switch (listKind) {
-      case DbListKind.Local:
-        await this.dbConfigStore.addLocalList(listName);
-        break;
-      case DbListKind.Remote:
-        await this.dbConfigStore.addRemoteList(listName);
-        break;
-      default:
-        throw Error(`Unknown list kind '${listKind}'`);
-    }
+  public async addNewList(listName: string): Promise<void> {
+    await this.dbConfigStore.addRemoteList(listName);
   }
 
   public async renameList(
-    currentDbItem: LocalListDbItem | RemoteUserDefinedListDbItem,
+    currentDbItem: RemoteUserDefinedListDbItem,
     newName: string,
   ): Promise<void> {
-    if (currentDbItem.kind === DbItemKind.LocalList) {
-      await this.dbConfigStore.renameLocalList(currentDbItem, newName);
-    } else if (currentDbItem.kind === DbItemKind.RemoteUserDefinedList) {
-      await this.dbConfigStore.renameRemoteList(currentDbItem, newName);
-    }
+    await this.dbConfigStore.renameRemoteList(currentDbItem, newName);
 
     const newDbItem = { ...currentDbItem, listName: newName };
     const newExpandedItems = replaceExpandedItem(
@@ -140,26 +139,8 @@ export class DbManager {
     await this.setExpandedItems(newExpandedItems);
   }
 
-  public async renameLocalDb(
-    currentDbItem: LocalDatabaseDbItem,
-    newName: string,
-  ): Promise<void> {
-    await this.dbConfigStore.renameLocalDb(
-      currentDbItem,
-      newName,
-      currentDbItem.parentListName,
-    );
-  }
-
-  public doesListExist(listKind: DbListKind, listName: string): boolean {
-    switch (listKind) {
-      case DbListKind.Local:
-        return this.dbConfigStore.doesLocalListExist(listName);
-      case DbListKind.Remote:
-        return this.dbConfigStore.doesRemoteListExist(listName);
-      default:
-        throw Error(`Unknown list kind '${listKind}'`);
-    }
+  public doesListExist(listName: string): boolean {
+    return this.dbConfigStore.doesRemoteListExist(listName);
   }
 
   public doesRemoteOwnerExist(owner: string): boolean {
@@ -168,10 +149,6 @@ export class DbManager {
 
   public doesRemoteRepoExist(nwo: string, listName?: string): boolean {
     return this.dbConfigStore.doesRemoteDbExist(nwo, listName);
-  }
-
-  public doesLocalDbExist(dbName: string, listName?: string): boolean {
-    return this.dbConfigStore.doesLocalDbExist(dbName, listName);
   }
 
   private getExpandedItems(): ExpandedDbItem[] {

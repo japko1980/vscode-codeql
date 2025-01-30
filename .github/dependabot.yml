@@ -8,8 +8,28 @@ updates:
     labels:
       - "Update dependencies"
     ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      # @types/node is related to the version of VS Code we're supporting and should
+      # not be updated to a newer version of Node automatically. However, patch versions
+      # are unrelated to the Node version, so we allow those.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      octokit:
+        patterns:
+          - "@octokit/*"
+        update-types:
+          - "minor"
+          - "patch"
+      storybook:
+        patterns:
+          - "@storybook/*"
+          - "storybook"
+      testing-library:
+        patterns:
+          - "@testing-library/*"
+      typescript-eslint:
+        patterns:
+          - "@typescript-eslint/*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -17,6 +37,10 @@ updates:
       day: "thursday" # Thursday is arbitrary
     labels:
       - "Update dependencies"
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+  - package-ecosystem: docker
+    directory: "extensions/ql-vscode/test/e2e/docker"
+    schedule:
+      interval: "weekly"
+      day: "thursday" # Thursday is arbitrary
+    labels:
+      - "Update dependencies"

@@ -1,19 +1,19 @@
-import * as React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
-import {
+import type {
   VariantAnalysis as VariantAnalysisDomainModel,
   VariantAnalysisScannedRepositoryResult,
   VariantAnalysisScannedRepositoryState,
-  VariantAnalysisStatus,
 } from "../../variant-analysis/shared/variant-analysis";
+import { VariantAnalysisStatus } from "../../variant-analysis/shared/variant-analysis";
 import { VariantAnalysisHeader } from "./VariantAnalysisHeader";
 import { VariantAnalysisOutcomePanels } from "./VariantAnalysisOutcomePanels";
 import { VariantAnalysisLoading } from "./VariantAnalysisLoading";
-import { ToVariantAnalysisMessage } from "../../pure/interface-types";
+import type { ToVariantAnalysisMessage } from "../../common/interface-types";
 import { vscode } from "../vscode-api";
-import { defaultFilterSortState } from "../../pure/variant-analysis-filter-sort";
-import { useTelemetryOnChange } from "../common/telemetry";
+import { defaultFilterSortState } from "../../variant-analysis/shared/variant-analysis-filter-sort";
+import { sendTelemetry, useTelemetryOnChange } from "../common/telemetry";
+import { useMessageFromExtension } from "../common/useMessageFromExtension";
 
 export type VariantAnalysisProps = {
   variantAnalysis?: VariantAnalysisDomainModel;
@@ -25,18 +25,21 @@ const openQueryFile = () => {
   vscode.postMessage({
     t: "openQueryFile",
   });
+  sendTelemetry("variant-analysis-open-query-file");
 };
 
 const openQueryText = () => {
   vscode.postMessage({
     t: "openQueryText",
   });
+  sendTelemetry("variant-analysis-open-query-text");
 };
 
 const stopQuery = () => {
   vscode.postMessage({
     t: "cancelVariantAnalysis",
   });
+  sendTelemetry("variant-analysis-cancel");
 };
 
 const openLogs = () => {
@@ -49,7 +52,7 @@ export function VariantAnalysis({
   variantAnalysis: initialVariantAnalysis,
   repoStates: initialRepoStates = [],
   repoResults: initialRepoResults = [],
-}: VariantAnalysisProps): JSX.Element {
+}: VariantAnalysisProps): React.JSX.Element {
   const [variantAnalysis, setVariantAnalysis] = useState<
     VariantAnalysisDomainModel | undefined
   >(initialVariantAnalysis);
@@ -75,47 +78,31 @@ export function VariantAnalysis({
     debounceTimeoutMillis: 1000,
   });
 
-  useEffect(() => {
-    const listener = (evt: MessageEvent) => {
-      if (evt.origin === window.origin) {
-        const msg: ToVariantAnalysisMessage = evt.data;
-        if (msg.t === "setVariantAnalysis") {
-          setVariantAnalysis(msg.variantAnalysis);
-          vscode.setState({
-            variantAnalysisId: msg.variantAnalysis.id,
-          });
-        } else if (msg.t === "setRepoResults") {
-          setRepoResults((oldRepoResults) => {
-            const newRepoIds = msg.repoResults.map((r) => r.repositoryId);
-            return [
-              ...oldRepoResults.filter(
-                (v) => !newRepoIds.includes(v.repositoryId),
-              ),
-              ...msg.repoResults,
-            ];
-          });
-        } else if (msg.t === "setRepoStates") {
-          setRepoStates((oldRepoStates) => {
-            const newRepoIds = msg.repoStates.map((r) => r.repositoryId);
-            return [
-              ...oldRepoStates.filter(
-                (v) => !newRepoIds.includes(v.repositoryId),
-              ),
-              ...msg.repoStates,
-            ];
-          });
-        }
-      } else {
-        // sanitize origin
-        const origin = evt.origin.replace(/\n|\r/g, "");
-        console.error(`Invalid event origin ${origin}`);
-      }
-    };
-    window.addEventListener("message", listener);
-
-    return () => {
-      window.removeEventListener("message", listener);
-    };
+  useMessageFromExtension<ToVariantAnalysisMessage>((msg) => {
+    if (msg.t === "setVariantAnalysis") {
+      setVariantAnalysis(msg.variantAnalysis);
+      vscode.setState({
+        variantAnalysisId: msg.variantAnalysis.id,
+      });
+    } else if (msg.t === "setFilterSortState") {
+      setFilterSortState(msg.filterSortState);
+    } else if (msg.t === "setRepoResults") {
+      setRepoResults((oldRepoResults) => {
+        const newRepoIds = msg.repoResults.map((r) => r.repositoryId);
+        return [
+          ...oldRepoResults.filter((v) => !newRepoIds.includes(v.repositoryId)),
+          ...msg.repoResults,
+        ];
+      });
+    } else if (msg.t === "setRepoStates") {
+      setRepoStates((oldRepoStates) => {
+        const newRepoIds = msg.repoStates.map((r) => r.repositoryId);
+        return [
+          ...oldRepoStates.filter((v) => !newRepoIds.includes(v.repositoryId)),
+          ...msg.repoStates,
+        ];
+      });
+    }
   }, []);
 
   const copyRepositoryList = useCallback(() => {
@@ -126,6 +113,7 @@ export function VariantAnalysis({
         repositoryIds: selectedRepositoryIds,
       },
     });
+    sendTelemetry("variant-analysis-copy-repository-list");
   }, [filterSortState, selectedRepositoryIds]);
 
   const exportResults = useCallback(() => {
@@ -136,6 +124,7 @@ export function VariantAnalysis({
         repositoryIds: selectedRepositoryIds,
       },
     });
+    sendTelemetry("variant-analysis-export-results");
   }, [filterSortState, selectedRepositoryIds]);
 
   if (

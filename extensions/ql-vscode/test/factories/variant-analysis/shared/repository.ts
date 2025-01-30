@@ -1,13 +1,13 @@
 import { faker } from "@faker-js/faker";
-import {
+import type {
   Repository,
   RepositoryWithMetadata,
 } from "../../../../src/variant-analysis/shared/repository";
 
 export function createMockRepository(): Repository {
   return {
-    id: faker.datatype.number(),
-    fullName: `github/${faker.random.word()}`,
+    id: faker.number.int(),
+    fullName: `github/${faker.word.sample()}`,
     private: faker.datatype.boolean(),
   };
 }
@@ -15,7 +15,7 @@ export function createMockRepository(): Repository {
 export function createMockRepositoryWithMetadata(): RepositoryWithMetadata {
   return {
     ...createMockRepository(),
-    stargazersCount: faker.datatype.number(),
+    stargazersCount: faker.number.int(),
     updatedAt: faker.date.past().toISOString(),
   };
 }

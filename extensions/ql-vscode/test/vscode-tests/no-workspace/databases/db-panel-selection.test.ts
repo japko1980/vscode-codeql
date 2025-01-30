@@ -1,21 +1,18 @@
 import { join } from "path";
 import { ensureDir, remove, writeJson } from "fs-extra";
-import {
-  DbConfig,
-  SelectedDbItemKind,
-} from "../../../../src/databases/config/db-config";
+import type { DbConfig } from "../../../../src/databases/config/db-config";
+import { SelectedDbItemKind } from "../../../../src/databases/config/db-config";
 import { DbManager } from "../../../../src/databases/db-manager";
 import { DbConfigStore } from "../../../../src/databases/config/db-config-store";
 import { DbTreeDataProvider } from "../../../../src/databases/ui/db-tree-data-provider";
 import { DbItemKind } from "../../../../src/databases/db-item";
-import {
-  DbTreeViewItem,
-  SELECTED_DB_ITEM_RESOURCE_URI,
-} from "../../../../src/databases/ui/db-tree-view-item";
-import { ExtensionApp } from "../../../../src/common/vscode/vscode-app";
+import type { DbTreeViewItem } from "../../../../src/databases/ui/db-tree-view-item";
+import { SELECTED_DB_ITEM_RESOURCE_URI } from "../../../../src/databases/ui/db-tree-view-item";
+import { ExtensionApp } from "../../../../src/common/vscode/extension-app";
 import { createMockExtensionContext } from "../../../factories/extension-context";
 import { createDbConfig } from "../../../factories/db-config-factories";
 import { setRemoteControllerRepo } from "../../../../src/config";
+import { createMockVariantAnalysisConfig } from "../../../factories/config";
 
 describe("db panel selection", () => {
   const workspaceStoragePath = join(__dirname, "test-workspace-storage");
@@ -40,7 +37,11 @@ describe("db panel selection", () => {
     const app = new ExtensionApp(extensionContext);
 
     dbConfigStore = new DbConfigStore(app, false);
-    dbManager = new DbManager(app, dbConfigStore);
+    dbManager = new DbManager(
+      app,
+      dbConfigStore,
+      createMockVariantAnalysisConfig(),
+    );
   });
 
   beforeEach(async () => {

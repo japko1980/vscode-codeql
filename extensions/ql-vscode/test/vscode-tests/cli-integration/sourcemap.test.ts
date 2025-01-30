@@ -1,14 +1,16 @@
-import { commands, Selection, window, workspace } from "vscode";
+import { Selection, window, workspace } from "vscode";
 import { join, basename } from "path";
-import { tmpDir } from "../../../src/helpers";
+import { tmpDir } from "../../../src/tmp-dir";
 import { readFile, writeFile, ensureDir, copy } from "fs-extra";
-
-jest.setTimeout(20_000);
+import { createVSCodeCommandManager } from "../../../src/common/vscode/commands";
+import type { AllCommands } from "../../../src/common/commands";
 
 /**
  * Integration tests for queries
  */
 describe("SourceMap", () => {
+  const commandManager = createVSCodeCommandManager<AllCommands>();
+
   it("should jump to QL code", async () => {
     const root = workspace.workspaceFolders![0].uri.fsPath;
     const srcFiles = {
@@ -32,7 +34,7 @@ describe("SourceMap", () => {
     expect(summaryDocument.languageId).toBe("ql-summary");
     const summaryEditor = await window.showTextDocument(summaryDocument);
     summaryEditor.selection = new Selection(356, 10, 356, 10);
-    await commands.executeCommand("codeQL.gotoQL");
+    await commandManager.execute("codeQL.gotoQL");
 
     const newEditor = window.activeTextEditor;
     expect(newEditor).toBeDefined();

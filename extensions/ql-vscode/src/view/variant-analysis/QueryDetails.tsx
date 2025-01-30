@@ -1,7 +1,6 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 import { ViewTitle } from "../common";
-import { LinkIconButton } from "./LinkIconButton";
+import { LinkIconButton } from "../common/LinkIconButton";
 
 export type QueryDetailsProps = {
   queryName: string;

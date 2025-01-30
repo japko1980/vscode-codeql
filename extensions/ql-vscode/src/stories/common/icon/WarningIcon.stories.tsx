@@ -1,18 +1,14 @@
-import * as React from "react";
+import type { Meta, StoryFn } from "@storybook/react";
 
-import { ComponentStory, ComponentMeta } from "@storybook/react";
-
-import {
-  CodePaths,
-  WarningIcon as WarningIconComponent,
-} from "../../../view/common";
+import type { CodePaths } from "../../../view/common";
+import { WarningIcon as WarningIconComponent } from "../../../view/common";
 
 export default {
   title: "Icon/Warning Icon",
   component: WarningIconComponent,
-} as ComponentMeta<typeof CodePaths>;
+} as Meta<typeof CodePaths>;
 
-const Template: ComponentStory<typeof WarningIconComponent> = (args) => (
+const Template: StoryFn<typeof WarningIconComponent> = (args) => (
   <WarningIconComponent {...args} />
 );
 

@@ -1,6 +1,4 @@
-import * as React from "react";
-
-import { ComponentMeta, ComponentStory } from "@storybook/react";
+import type { Meta, StoryFn } from "@storybook/react";
 
 import { VariantAnalysisContainer } from "../../view/variant-analysis/VariantAnalysisContainer";
 import { QueryDetails as QueryDetailsComponent } from "../../view/variant-analysis/QueryDetails";
@@ -29,9 +27,9 @@ export default {
       },
     },
   },
-} as ComponentMeta<typeof QueryDetailsComponent>;
+} as Meta<typeof QueryDetailsComponent>;
 
-const Template: ComponentStory<typeof QueryDetailsComponent> = (args) => (
+const Template: StoryFn<typeof QueryDetailsComponent> = (args) => (
   <QueryDetailsComponent {...args} />
 );
 

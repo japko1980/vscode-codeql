@@ -1,108 +1,73 @@
 import {
   CancellationTokenSource,
   commands,
-  env,
-  extensions,
-  QuickPickItem,
-  TextDocument,
-  TextEditor,
-  Uri,
   window,
-  workspace,
+  Uri,
+  ConfigurationTarget,
 } from "vscode";
-import { CodeQLExtensionInterface } from "../../../../src/extension";
-import { extLogger } from "../../../../src/common";
-import { setRemoteControllerRepo } from "../../../../src/config";
+import { extLogger } from "../../../../src/common/logging/vscode";
+import {
+  VSCODE_GITHUB_ENTERPRISE_URI_SETTING,
+  setRemoteControllerRepo,
+} from "../../../../src/config";
 import * as ghApiClient from "../../../../src/variant-analysis/gh-api/gh-api-client";
-import * as ghActionsApiClient from "../../../../src/variant-analysis/gh-api/gh-actions-api-client";
-import * as fs from "fs-extra";
-import { join } from "path";
-import { Readable } from "stream";
-import { Response } from "node-fetch";
-import * as fetchModule from "node-fetch";
+import { isAbsolute, join } from "path";
 
 import { VariantAnalysisManager } from "../../../../src/variant-analysis/variant-analysis-manager";
-import { CodeQLCliServer } from "../../../../src/cli";
-import {
-  fixWorkspaceReferences,
-  restoreWorkspaceReferences,
-  storagePath,
-} from "../../global.helper";
+import type { CodeQLCliServer } from "../../../../src/codeql-cli/cli";
+import { getActivatedExtension, storagePath } from "../../global.helper";
 import { VariantAnalysisResultsManager } from "../../../../src/variant-analysis/variant-analysis-results-manager";
-import { createMockVariantAnalysis } from "../../../factories/variant-analysis/shared/variant-analysis";
-import * as VariantAnalysisModule from "../../../../src/variant-analysis/shared/variant-analysis";
-import {
-  createMockScannedRepo,
-  createMockScannedRepos,
-} from "../../../factories/variant-analysis/shared/scanned-repositories";
-import {
-  VariantAnalysis,
-  VariantAnalysisScannedRepository,
-  VariantAnalysisScannedRepositoryDownloadStatus,
-  VariantAnalysisScannedRepositoryState,
-  VariantAnalysisStatus,
-} from "../../../../src/variant-analysis/shared/variant-analysis";
-import { createTimestampFile } from "../../../../src/helpers";
-import { createMockVariantAnalysisRepoTask } from "../../../factories/variant-analysis/gh-api/variant-analysis-repo-task";
-import {
-  VariantAnalysis as VariantAnalysisApiResponse,
-  VariantAnalysisRepoTask,
-} from "../../../../src/variant-analysis/gh-api/variant-analysis";
+import type { VariantAnalysisSubmission } from "../../../../src/variant-analysis/shared/variant-analysis";
+import { VariantAnalysisStatus } from "../../../../src/variant-analysis/shared/variant-analysis";
+import type { VariantAnalysis as VariantAnalysisApiResponse } from "../../../../src/variant-analysis/gh-api/variant-analysis";
 import { createMockApiResponse } from "../../../factories/variant-analysis/gh-api/variant-analysis-api-response";
-import { UserCancellationException } from "../../../../src/commandRunner";
-import { Repository } from "../../../../src/variant-analysis/gh-api/repository";
-import {
-  defaultFilterSortState,
-  SortKey,
-} from "../../../../src/pure/variant-analysis-filter-sort";
+import { UserCancellationException } from "../../../../src/common/vscode/progress";
+import type { Repository } from "../../../../src/variant-analysis/gh-api/repository";
 import { DbManager } from "../../../../src/databases/db-manager";
-import { App } from "../../../../src/common/app";
-import { ExtensionApp } from "../../../../src/common/vscode/vscode-app";
+import { ExtensionApp } from "../../../../src/common/vscode/extension-app";
 import { DbConfigStore } from "../../../../src/databases/config/db-config-store";
-
-// up to 3 minutes per test
-jest.setTimeout(3 * 60 * 1000);
+import { mockedQuickPickItem } from "../../utils/mocking.helpers";
+import { QueryLanguage } from "../../../../src/common/query-language";
+import { readBundledPack } from "../../utils/bundled-pack-helpers";
+import { load } from "js-yaml";
+import type { ExtensionPackMetadata } from "../../../../src/model-editor/extension-pack-metadata";
+import type { QlPackLockFile } from "../../../../src/packaging/qlpack-lock-file";
+//import { expect } from "@jest/globals";
+import "../../../matchers/toExistInCodeQLPack";
+import type { QlPackDetails } from "../../../../src/variant-analysis/ql-pack-details";
+import { createMockVariantAnalysisConfig } from "../../../factories/config";
 
 describe("Variant Analysis Manager", () => {
   let cli: CodeQLCliServer;
-  let app: App;
   let cancellationTokenSource: CancellationTokenSource;
   let variantAnalysisManager: VariantAnalysisManager;
-  let variantAnalysisResultsManager: VariantAnalysisResultsManager;
-  let dbManager: DbManager;
-  let variantAnalysis: VariantAnalysis;
-  let scannedRepos: VariantAnalysisScannedRepository[];
 
   beforeEach(async () => {
     jest.spyOn(extLogger, "log").mockResolvedValue(undefined);
 
     cancellationTokenSource = new CancellationTokenSource();
 
-    scannedRepos = createMockScannedRepos();
-    variantAnalysis = createMockVariantAnalysis({
-      status: VariantAnalysisStatus.InProgress,
-      scannedRepos,
-    });
-
-    const extension = await extensions
-      .getExtension<CodeQLExtensionInterface | Record<string, never>>(
-        "GitHub.vscode-codeql",
-      )!
-      .activate();
+    const extension = await getActivatedExtension();
     cli = extension.cliServer;
-    app = new ExtensionApp(extension.ctx);
-    dbManager = new DbManager(app, new DbConfigStore(app));
-    variantAnalysisResultsManager = new VariantAnalysisResultsManager(
+    const app = new ExtensionApp(extension.ctx);
+    const dbManager = new DbManager(
+      app,
+      new DbConfigStore(app),
+      createMockVariantAnalysisConfig(),
+    );
+    const variantAnalysisConfig = createMockVariantAnalysisConfig();
+    const variantAnalysisResultsManager = new VariantAnalysisResultsManager(
       cli,
+      variantAnalysisConfig,
       extLogger,
     );
     variantAnalysisManager = new VariantAnalysisManager(
-      extension.ctx,
       app,
       cli,
       storagePath,
       variantAnalysisResultsManager,
       dbManager,
+      variantAnalysisConfig,
     );
   });
 
@@ -115,22 +80,17 @@ describe("Variant Analysis Manager", () => {
       typeof ghApiClient.submitVariantAnalysis
     >;
     let mockApiResponse: VariantAnalysisApiResponse;
-    let originalDeps: Record<string, string> | undefined;
     let executeCommandSpy: jest.SpiedFunction<typeof commands.executeCommand>;
 
     const baseDir = join(__dirname, "..");
-    const qlpackFileWithWorkspaceRefs = getFile(
-      "data-remote-qlpack/qlpack.yml",
-    ).fsPath;
-
-    function getFile(file: string): Uri {
-      return Uri.file(join(baseDir, file));
-    }
 
     beforeEach(async () => {
-      jest
-        .spyOn(window, "showQuickPick")
-        .mockResolvedValueOnce("javascript" as unknown as QuickPickItem);
+      jest.spyOn(window, "showQuickPick").mockResolvedValueOnce(
+        mockedQuickPickItem({
+          label: "JavaScript",
+          language: "javascript",
+        }),
+      );
 
       cancellationTokenSource = new CancellationTokenSource();
 
@@ -153,89 +113,136 @@ describe("Variant Analysis Manager", () => {
 
       // always run in the vscode-codeql repo
       await setRemoteControllerRepo("github/vscode-codeql");
-
-      // Only new version support `${workspace}` in qlpack.yml
-      originalDeps = await fixWorkspaceReferences(
-        qlpackFileWithWorkspaceRefs,
-        cli,
-      );
     });
 
-    afterEach(async () => {
-      await restoreWorkspaceReferences(
-        qlpackFileWithWorkspaceRefs,
-        originalDeps,
+    it("fails if MRVA is not supported for this GHE URI", async () => {
+      await VSCODE_GITHUB_ENTERPRISE_URI_SETTING.updateValue(
+        "https://github.example.com",
+        ConfigurationTarget.Global,
+      );
+
+      const qlPackDetails: QlPackDetails = {
+        queryFiles: [getFileOrDir("data-remote-qlpack/in-pack.ql")],
+        qlPackRootPath: getFileOrDir("data-remote-qlpack"),
+        qlPackFilePath: getFileOrDir("data-remote-qlpack/qlpack.yml"),
+        language: QueryLanguage.Javascript,
+      };
+
+      await expect(
+        variantAnalysisManager.runVariantAnalysis(
+          qlPackDetails,
+          progress,
+          cancellationTokenSource.token,
+        ),
+      ).rejects.toThrow(
+        new Error(
+          "Multi-repository variant analysis is not enabled for https://github.example.com/",
+        ),
       );
     });
 
     it("should run a variant analysis that is part of a qlpack", async () => {
-      const fileUri = getFile("data-remote-qlpack/in-pack.ql");
+      const filePath = getFileOrDir("data-remote-qlpack/in-pack.ql");
+      const qlPackRootPath = getFileOrDir("data-remote-qlpack");
+      const qlPackFilePath = getFileOrDir("data-remote-qlpack/qlpack.yml");
+      const qlPackDetails: QlPackDetails = {
+        queryFiles: [filePath],
+        qlPackRootPath,
+        qlPackFilePath,
+        language: QueryLanguage.Javascript,
+      };
 
       await variantAnalysisManager.runVariantAnalysis(
-        fileUri,
+        qlPackDetails,
         progress,
         cancellationTokenSource.token,
       );
 
-      expect(executeCommandSpy).toBeCalledWith(
-        "codeQL.monitorVariantAnalysis",
+      expect(executeCommandSpy).toHaveBeenCalledWith(
+        "codeQL.monitorNewVariantAnalysis",
         expect.objectContaining({
           id: mockApiResponse.id,
           status: VariantAnalysisStatus.InProgress,
         }),
       );
 
-      expect(mockGetRepositoryFromNwo).toBeCalledTimes(1);
-      expect(mockSubmitVariantAnalysis).toBeCalledTimes(1);
+      expect(mockGetRepositoryFromNwo).toHaveBeenCalledTimes(1);
+      expect(mockSubmitVariantAnalysis).toHaveBeenCalledTimes(1);
     });
 
     it("should run a remote query that is not part of a qlpack", async () => {
-      const fileUri = getFile("data-remote-no-qlpack/in-pack.ql");
+      const filePath = getFileOrDir("data-remote-no-qlpack/in-pack.ql");
+      const qlPackRootPath = getFileOrDir("data-remote-no-qlpack");
+      const qlPackDetails: QlPackDetails = {
+        queryFiles: [filePath],
+        qlPackRootPath,
+        qlPackFilePath: undefined,
+        language: QueryLanguage.Javascript,
+      };
 
       await variantAnalysisManager.runVariantAnalysis(
-        fileUri,
+        qlPackDetails,
         progress,
         cancellationTokenSource.token,
       );
 
-      expect(executeCommandSpy).toBeCalledWith(
-        "codeQL.monitorVariantAnalysis",
+      expect(executeCommandSpy).toHaveBeenCalledWith(
+        "codeQL.monitorNewVariantAnalysis",
         expect.objectContaining({
           id: mockApiResponse.id,
           status: VariantAnalysisStatus.InProgress,
         }),
       );
 
-      expect(mockGetRepositoryFromNwo).toBeCalledTimes(1);
-      expect(mockSubmitVariantAnalysis).toBeCalledTimes(1);
+      expect(mockGetRepositoryFromNwo).toHaveBeenCalledTimes(1);
+      expect(mockSubmitVariantAnalysis).toHaveBeenCalledTimes(1);
     });
 
     it("should run a remote query that is nested inside a qlpack", async () => {
-      const fileUri = getFile("data-remote-qlpack-nested/subfolder/in-pack.ql");
+      const filePath = getFileOrDir(
+        "data-remote-qlpack-nested/subfolder/in-pack.ql",
+      );
+      const qlPackRootPath = getFileOrDir("data-remote-qlpack-nested");
+      const qlPackFilePath = getFileOrDir(
+        "data-remote-qlpack-nested/codeql-pack.yml",
+      );
+      const qlPackDetails: QlPackDetails = {
+        queryFiles: [filePath],
+        qlPackRootPath,
+        qlPackFilePath,
+        language: QueryLanguage.Javascript,
+      };
 
       await variantAnalysisManager.runVariantAnalysis(
-        fileUri,
+        qlPackDetails,
         progress,
         cancellationTokenSource.token,
       );
 
-      expect(executeCommandSpy).toBeCalledWith(
-        "codeQL.monitorVariantAnalysis",
+      expect(executeCommandSpy).toHaveBeenCalledWith(
+        "codeQL.monitorNewVariantAnalysis",
         expect.objectContaining({
           id: mockApiResponse.id,
           status: VariantAnalysisStatus.InProgress,
         }),
       );
 
-      expect(mockGetRepositoryFromNwo).toBeCalledTimes(1);
-      expect(mockSubmitVariantAnalysis).toBeCalledTimes(1);
+      expect(mockGetRepositoryFromNwo).toHaveBeenCalledTimes(1);
+      expect(mockSubmitVariantAnalysis).toHaveBeenCalledTimes(1);
     });
 
     it("should cancel a run before uploading", async () => {
-      const fileUri = getFile("data-remote-no-qlpack/in-pack.ql");
+      const filePath = getFileOrDir("data-remote-no-qlpack/in-pack.ql");
+      const qlPackRootPath = getFileOrDir("data-remote-no-qlpack");
+      const qlPackDetails: QlPackDetails = {
+        queryFiles: [filePath],
+        qlPackRootPath,
+        qlPackFilePath: undefined,
+        language: QueryLanguage.Javascript,
+      };
 
       const promise = variantAnalysisManager.runVariantAnalysis(
-        fileUri,
+        qlPackDetails,
         progress,
         cancellationTokenSource.token,
       );
@@ -244,820 +251,249 @@ describe("Variant Analysis Manager", () => {
 
       await expect(promise).rejects.toThrow(UserCancellationException);
     });
-  });
 
-  describe("rehydrateVariantAnalysis", () => {
-    const variantAnalysis = createMockVariantAnalysis({});
-
-    describe("when the directory does not exist", () => {
-      it("should fire the removed event if the file does not exist", async () => {
-        const stub = jest.fn();
-        variantAnalysisManager.onVariantAnalysisRemoved(stub);
-
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-        expect(stub).toBeCalledTimes(1);
-      });
-    });
-
-    describe("when the directory exists", () => {
-      beforeEach(async () => {
-        await fs.ensureDir(join(storagePath, variantAnalysis.id.toString()));
-      });
-
-      it("should store the variant analysis", async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-        expect(
-          await variantAnalysisManager.getVariantAnalysis(variantAnalysis.id),
-        ).toEqual(variantAnalysis);
-      });
-
-      it("should not error if the repo states file does not exist", async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-        expect(
-          await variantAnalysisManager.getRepoStates(variantAnalysis.id),
-        ).toEqual([]);
-      });
-
-      it("should read in the repo states if it exists", async () => {
-        await fs.writeJson(
-          join(storagePath, variantAnalysis.id.toString(), "repo_states.json"),
-          {
-            [scannedRepos[0].repository.id]: {
-              repositoryId: scannedRepos[0].repository.id,
-              downloadStatus:
-                VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
+    describe("check variant analysis generated packs", () => {
+      beforeEach(() => {
+        mockSubmitVariantAnalysis = jest
+          .spyOn(ghApiClient, "submitVariantAnalysis")
+          .mockResolvedValue({
+            id: 1,
+            query_language: QueryLanguage.Javascript,
+            query_pack_url: "http://example.com",
+            created_at: "2021-01-01T00:00:00Z",
+            updated_at: "2021-01-01T00:00:00Z",
+            status: "in_progress",
+            controller_repo: {
+              id: 1,
+              name: "vscode-codeql",
+              full_name: "github/vscode-codeql",
+              private: false,
             },
-            [scannedRepos[1].repository.id]: {
-              repositoryId: scannedRepos[1].repository.id,
-              downloadStatus:
-                VariantAnalysisScannedRepositoryDownloadStatus.InProgress,
-            },
-          },
-        );
+            actions_workflow_run_id: 20,
+            scanned_repositories: [] as any[],
+          });
 
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-        expect(
-          await variantAnalysisManager.getRepoStates(variantAnalysis.id),
-        ).toEqual(
-          expect.arrayContaining([
-            {
-              repositoryId: scannedRepos[0].repository.id,
-              downloadStatus:
-                VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-            },
-            {
-              repositoryId: scannedRepos[1].repository.id,
-              downloadStatus:
-                VariantAnalysisScannedRepositoryDownloadStatus.InProgress,
-            },
-          ]),
-        );
-      });
-    });
-  });
-
-  describe("autoDownloadVariantAnalysisResult", () => {
-    let getVariantAnalysisRepoStub: jest.SpiedFunction<
-      typeof ghApiClient.getVariantAnalysisRepo
-    >;
-    let getVariantAnalysisRepoResultStub: jest.SpiedFunction<
-      typeof fetchModule.default
-    >;
-
-    let repoStatesPath: string;
-
-    beforeEach(async () => {
-      getVariantAnalysisRepoStub = jest.spyOn(
-        ghApiClient,
-        "getVariantAnalysisRepo",
-      );
-      getVariantAnalysisRepoResultStub = jest.spyOn(fetchModule, "default");
-
-      repoStatesPath = join(
-        storagePath,
-        variantAnalysis.id.toString(),
-        "repo_states.json",
-      );
-    });
-
-    describe("when the artifact_url is missing", () => {
-      beforeEach(async () => {
-        const dummyRepoTask = createMockVariantAnalysisRepoTask();
-        delete dummyRepoTask.artifact_url;
-
-        getVariantAnalysisRepoStub.mockResolvedValue(dummyRepoTask);
+        executeCommandSpy = jest.spyOn(commands, "executeCommand");
       });
 
-      it("should not try to download the result", async () => {
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        expect(getVariantAnalysisRepoResultStub).not.toHaveBeenCalled();
-      });
-    });
-
-    describe("when the artifact_url is present", () => {
-      let dummyRepoTask: VariantAnalysisRepoTask;
-
-      beforeEach(async () => {
-        dummyRepoTask = createMockVariantAnalysisRepoTask();
-
-        getVariantAnalysisRepoStub.mockResolvedValue(dummyRepoTask);
-
-        const sourceFilePath = join(
-          __dirname,
-          "../data/variant-analysis-results.zip",
-        );
-        const fileContents = fs.readFileSync(sourceFilePath);
-        const response = new Response(Readable.from(fileContents));
-        response.size = fileContents.length;
-        getVariantAnalysisRepoResultStub.mockResolvedValue(response);
-      });
-
-      it("should return early if variant analysis is cancelled", async () => {
-        cancellationTokenSource.cancel();
-
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        expect(getVariantAnalysisRepoStub).not.toHaveBeenCalled();
-      });
-
-      it("should fetch a repo task", async () => {
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        expect(getVariantAnalysisRepoStub).toHaveBeenCalled();
-      });
-
-      it("should fetch a repo result", async () => {
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        expect(getVariantAnalysisRepoResultStub).toHaveBeenCalled();
-      });
-
-      it("should skip the download if the repository has already been downloaded", async () => {
-        // First, do a download so it is downloaded. This avoids having to mock the repo states.
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        getVariantAnalysisRepoStub.mockClear();
-
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        expect(getVariantAnalysisRepoStub).not.toHaveBeenCalled();
-      });
-
-      it("should write the repo state when the download is successful", async () => {
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        await expect(fs.readJson(repoStatesPath)).resolves.toEqual({
-          [scannedRepos[0].repository.id]: {
-            repositoryId: scannedRepos[0].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-          },
+      it("should run a remote query that is part of a qlpack", async () => {
+        await doVariantAnalysisTest({
+          queryPaths: ["data-remote-qlpack/in-pack.ql"],
+          qlPackRootPath: "data-remote-qlpack",
+          qlPackFilePath: "data-remote-qlpack/qlpack.yml",
+          expectedPackName: "github/remote-query-pack",
+          filesThatExist: ["in-pack.ql", "lib.qll"],
+          filesThatDoNotExist: [],
+          qlxFilesThatExist: ["in-pack.qlx"],
         });
       });
 
-      it("should not write the repo state when the download fails", async () => {
-        getVariantAnalysisRepoResultStub.mockRejectedValue(
-          new Error("Failed to download"),
-        );
-
-        await expect(
-          variantAnalysisManager.autoDownloadVariantAnalysisResult(
-            scannedRepos[0],
-            variantAnalysis,
-            cancellationTokenSource.token,
-          ),
-        ).rejects.toThrow();
-
-        await expect(fs.pathExists(repoStatesPath)).resolves.toBe(false);
-      });
-
-      it("should have a failed repo state when the repo task API fails", async () => {
-        getVariantAnalysisRepoStub.mockRejectedValueOnce(
-          new Error("Failed to download"),
-        );
-
-        await expect(
-          variantAnalysisManager.autoDownloadVariantAnalysisResult(
-            scannedRepos[0],
-            variantAnalysis,
-            cancellationTokenSource.token,
-          ),
-        ).rejects.toThrow();
-
-        await expect(fs.pathExists(repoStatesPath)).resolves.toBe(false);
-
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[1],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        await expect(fs.readJson(repoStatesPath)).resolves.toEqual({
-          [scannedRepos[0].repository.id]: {
-            repositoryId: scannedRepos[0].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Failed,
-          },
-          [scannedRepos[1].repository.id]: {
-            repositoryId: scannedRepos[1].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-          },
+      it("should run a remote query that is not part of a qlpack", async () => {
+        await doVariantAnalysisTest({
+          queryPaths: ["data-remote-no-qlpack/in-pack.ql"],
+          qlPackRootPath: "data-remote-no-qlpack",
+          qlPackFilePath: undefined,
+          expectedPackName: "codeql-remote/query",
+          filesThatExist: ["in-pack.ql"],
+          filesThatDoNotExist: ["lib.qll", "not-in-pack.ql"],
+          qlxFilesThatExist: ["in-pack.qlx"],
         });
       });
 
-      it("should have a failed repo state when the download fails", async () => {
-        getVariantAnalysisRepoResultStub.mockRejectedValueOnce(
-          new Error("Failed to download"),
-        );
-
-        await expect(
-          variantAnalysisManager.autoDownloadVariantAnalysisResult(
-            scannedRepos[0],
-            variantAnalysis,
-            cancellationTokenSource.token,
-          ),
-        ).rejects.toThrow();
-
-        await expect(fs.pathExists(repoStatesPath)).resolves.toBe(false);
-
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[1],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        await expect(fs.readJson(repoStatesPath)).resolves.toEqual({
-          [scannedRepos[0].repository.id]: {
-            repositoryId: scannedRepos[0].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Failed,
-          },
-          [scannedRepos[1].repository.id]: {
-            repositoryId: scannedRepos[1].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-          },
+      it("should run a remote query that is nested inside a qlpack", async () => {
+        await doVariantAnalysisTest({
+          queryPaths: ["data-remote-qlpack-nested/subfolder/in-pack.ql"],
+          qlPackRootPath: "data-remote-qlpack-nested",
+          qlPackFilePath: "data-remote-qlpack-nested/codeql-pack.yml",
+          expectedPackName: "github/remote-query-pack",
+          filesThatExist: ["subfolder/in-pack.ql", "otherfolder/lib.qll"],
+          filesThatDoNotExist: ["subfolder/not-in-pack.ql"],
+          qlxFilesThatExist: ["subfolder/in-pack.qlx"],
         });
       });
 
-      it("should update the repo state correctly", async () => {
-        await mockRepoStates({
-          [scannedRepos[1].repository.id]: {
-            repositoryId: scannedRepos[1].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-          },
-          [scannedRepos[2].repository.id]: {
-            repositoryId: scannedRepos[2].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.InProgress,
-          },
-        });
-
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-        await variantAnalysisManager.autoDownloadVariantAnalysisResult(
-          scannedRepos[0],
-          variantAnalysis,
-          cancellationTokenSource.token,
-        );
-
-        await expect(fs.readJson(repoStatesPath)).resolves.toEqual({
-          [scannedRepos[1].repository.id]: {
-            repositoryId: scannedRepos[1].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-          },
-          [scannedRepos[2].repository.id]: {
-            repositoryId: scannedRepos[2].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.InProgress,
-          },
-          [scannedRepos[0].repository.id]: {
-            repositoryId: scannedRepos[0].repository.id,
-            downloadStatus:
-              VariantAnalysisScannedRepositoryDownloadStatus.Succeeded,
-          },
-        });
-      });
-
-      async function mockRepoStates(
-        repoStates: Record<number, VariantAnalysisScannedRepositoryState>,
-      ) {
-        await fs.outputJson(repoStatesPath, repoStates);
-      }
-    });
-  });
-
-  describe("enqueueDownload", () => {
-    it("should pop download tasks off the queue", async () => {
-      const getResultsSpy = jest
-        .spyOn(variantAnalysisManager, "autoDownloadVariantAnalysisResult")
-        .mockResolvedValue(undefined);
-
-      await variantAnalysisManager.enqueueDownload(
-        scannedRepos[0],
-        variantAnalysis,
-        cancellationTokenSource.token,
-      );
-      await variantAnalysisManager.enqueueDownload(
-        scannedRepos[1],
-        variantAnalysis,
-        cancellationTokenSource.token,
-      );
-      await variantAnalysisManager.enqueueDownload(
-        scannedRepos[2],
-        variantAnalysis,
-        cancellationTokenSource.token,
-      );
-
-      expect(variantAnalysisManager.downloadsQueueSize()).toBe(0);
-      expect(getResultsSpy).toBeCalledTimes(3);
-    });
-  });
-
-  describe("removeVariantAnalysis", () => {
-    let removeAnalysisResultsStub: jest.SpiedFunction<
-      typeof variantAnalysisResultsManager.removeAnalysisResults
-    >;
-    let dummyVariantAnalysis: VariantAnalysis;
-
-    beforeEach(async () => {
-      dummyVariantAnalysis = createMockVariantAnalysis({});
-
-      removeAnalysisResultsStub = jest
-        .spyOn(variantAnalysisResultsManager, "removeAnalysisResults")
-        .mockReturnValue(undefined);
-    });
-
-    it("should remove variant analysis", async () => {
-      await fs.ensureDir(join(storagePath, dummyVariantAnalysis.id.toString()));
-
-      await variantAnalysisManager.rehydrateVariantAnalysis(
-        dummyVariantAnalysis,
-      );
-      expect(variantAnalysisManager.variantAnalysesSize).toBe(1);
-
-      await variantAnalysisManager.removeVariantAnalysis(dummyVariantAnalysis);
-
-      expect(removeAnalysisResultsStub).toBeCalledTimes(1);
-      expect(variantAnalysisManager.variantAnalysesSize).toBe(0);
-
-      await expect(
-        fs.pathExists(join(storagePath, dummyVariantAnalysis.id.toString())),
-      ).resolves.toBe(false);
-    });
-  });
-
-  describe("rehydrateVariantAnalysis", () => {
-    let variantAnalysis: VariantAnalysis;
-    const variantAnalysisRemovedSpy = jest.fn();
-    let executeCommandSpy: jest.SpiedFunction<typeof commands.executeCommand>;
-
-    beforeEach(() => {
-      variantAnalysis = createMockVariantAnalysis({});
-
-      variantAnalysisManager.onVariantAnalysisRemoved(
-        variantAnalysisRemovedSpy,
-      );
-
-      executeCommandSpy = jest
-        .spyOn(commands, "executeCommand")
-        .mockResolvedValue(undefined);
-    });
-
-    describe("when variant analysis record doesn't exist", () => {
-      it("should remove the variant analysis", async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-        expect(variantAnalysisRemovedSpy).toHaveBeenCalledTimes(1);
-      });
-
-      it("should not trigger a monitoring command", async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-        expect(executeCommandSpy).not.toHaveBeenCalled();
-      });
-    });
-
-    describe("when variant analysis record does exist", () => {
-      let variantAnalysisStorageLocation: string;
-
-      beforeEach(async () => {
-        variantAnalysisStorageLocation =
-          variantAnalysisManager.getVariantAnalysisStorageLocation(
-            variantAnalysis.id,
-          );
-        await createTimestampFile(variantAnalysisStorageLocation);
-      });
-
-      afterEach(() => {
-        fs.rmSync(variantAnalysisStorageLocation, { recursive: true });
-      });
-
-      describe("when the variant analysis is not complete", () => {
-        beforeEach(() => {
-          jest
-            .spyOn(VariantAnalysisModule, "isVariantAnalysisComplete")
-            .mockResolvedValue(false);
-        });
-
-        it("should not remove the variant analysis", async () => {
-          await variantAnalysisManager.rehydrateVariantAnalysis(
-            variantAnalysis,
-          );
-          expect(variantAnalysisRemovedSpy).not.toHaveBeenCalled();
-        });
-
-        it("should trigger a monitoring command", async () => {
-          await variantAnalysisManager.rehydrateVariantAnalysis(
-            variantAnalysis,
-          );
-          expect(executeCommandSpy).toHaveBeenCalledWith(
-            "codeQL.monitorVariantAnalysis",
-            expect.anything(),
-          );
-        });
-      });
-
-      describe("when the variant analysis is complete", () => {
-        beforeEach(() => {
-          jest
-            .spyOn(VariantAnalysisModule, "isVariantAnalysisComplete")
-            .mockResolvedValue(true);
-        });
-
-        it("should not remove the variant analysis", async () => {
-          await variantAnalysisManager.rehydrateVariantAnalysis(
-            variantAnalysis,
-          );
-          expect(variantAnalysisRemovedSpy).not.toHaveBeenCalled();
-        });
-
-        it("should not trigger a monitoring command", async () => {
-          await variantAnalysisManager.rehydrateVariantAnalysis(
-            variantAnalysis,
-          );
-          expect(executeCommandSpy).not.toHaveBeenCalled();
-        });
-      });
-    });
-  });
-
-  describe("cancelVariantAnalysis", () => {
-    let variantAnalysis: VariantAnalysis;
-    let mockCancelVariantAnalysis: jest.SpiedFunction<
-      typeof ghActionsApiClient.cancelVariantAnalysis
-    >;
-
-    let variantAnalysisStorageLocation: string;
-
-    beforeEach(async () => {
-      variantAnalysis = createMockVariantAnalysis({});
-
-      mockCancelVariantAnalysis = jest
-        .spyOn(ghActionsApiClient, "cancelVariantAnalysis")
-        .mockResolvedValue(undefined);
-
-      variantAnalysisStorageLocation =
-        variantAnalysisManager.getVariantAnalysisStorageLocation(
-          variantAnalysis.id,
-        );
-      await createTimestampFile(variantAnalysisStorageLocation);
-      await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-    });
-
-    afterEach(() => {
-      fs.rmSync(variantAnalysisStorageLocation, { recursive: true });
-    });
-
-    it("should return early if the variant analysis is not found", async () => {
-      try {
-        await variantAnalysisManager.cancelVariantAnalysis(
-          variantAnalysis.id + 100,
-        );
-      } catch (error: any) {
-        expect(error.message).toBe(
-          `No variant analysis with id: ${variantAnalysis.id + 100}`,
-        );
-      }
-    });
-
-    it("should return early if the variant analysis does not have an actions workflow run id", async () => {
-      await variantAnalysisManager.onVariantAnalysisUpdated({
-        ...variantAnalysis,
-        actionsWorkflowRunId: undefined,
-      });
-
-      try {
-        await variantAnalysisManager.cancelVariantAnalysis(variantAnalysis.id);
-      } catch (error: any) {
-        expect(error.message).toBe(
-          `No workflow run id for variant analysis with id: ${variantAnalysis.id}`,
-        );
-      }
-    });
-
-    it("should return cancel if valid", async () => {
-      await variantAnalysisManager.cancelVariantAnalysis(variantAnalysis.id);
-
-      expect(mockCancelVariantAnalysis).toBeCalledWith(
-        app.credentials,
-        variantAnalysis,
-      );
-    });
-  });
-
-  describe("copyRepoListToClipboard", () => {
-    let variantAnalysis: VariantAnalysis;
-    let variantAnalysisStorageLocation: string;
-
-    const writeTextStub = jest.fn();
-
-    beforeEach(async () => {
-      variantAnalysis = createMockVariantAnalysis({});
-
-      variantAnalysisStorageLocation =
-        variantAnalysisManager.getVariantAnalysisStorageLocation(
-          variantAnalysis.id,
-        );
-      await createTimestampFile(variantAnalysisStorageLocation);
-      await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-      jest.spyOn(env, "clipboard", "get").mockReturnValue({
-        readText: jest.fn(),
-        writeText: writeTextStub,
-      });
-    });
-
-    afterEach(() => {
-      fs.rmSync(variantAnalysisStorageLocation, { recursive: true });
-    });
-
-    describe("when the variant analysis does not have any repositories", () => {
-      beforeEach(async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis({
-          ...variantAnalysis,
-          scannedRepos: [],
-        });
-      });
-
-      it("should not copy any text", async () => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysis.id,
-        );
-
-        expect(writeTextStub).not.toBeCalled();
-      });
-    });
-
-    describe("when the variant analysis does not have any repositories with results", () => {
-      beforeEach(async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis({
-          ...variantAnalysis,
-          scannedRepos: [
-            {
-              ...createMockScannedRepo(),
-              resultCount: 0,
-            },
-            {
-              ...createMockScannedRepo(),
-              resultCount: undefined,
-            },
+      it("should run a remote query with extension packs inside a qlpack", async () => {
+        await cli.setUseExtensionPacks(true);
+        await doVariantAnalysisTest({
+          queryPaths: ["data-remote-qlpack-nested/subfolder/in-pack.ql"],
+          qlPackRootPath: "data-remote-qlpack-nested",
+          qlPackFilePath: "data-remote-qlpack-nested/codeql-pack.yml",
+          expectedPackName: "github/remote-query-pack",
+          filesThatExist: [
+            "subfolder/in-pack.ql",
+            "otherfolder/lib.qll",
+            ".codeql/libraries/semmle/targets-extension/0.0.0/ext/extension.yml",
+          ],
+          filesThatDoNotExist: ["subfolder/not-in-pack.ql"],
+          qlxFilesThatExist: ["subfolder/in-pack.qlx"],
+          dependenciesToCheck: [
+            "codeql/javascript-all",
+            "semmle/targets-extension",
           ],
         });
       });
+    });
 
-      it("should not copy any text", async () => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysis.id,
+    // Test running core java queries to ensure that we can compile queries in packs
+    // that contain queries with extensible predicates
+    it("should run a remote query that is part of the java pack", async () => {
+      if (!process.env.TEST_CODEQL_PATH) {
+        fail(
+          "TEST_CODEQL_PATH environment variable not set. It should point to the absolute path to a checkout of the codeql repository.",
         );
+      }
 
-        expect(writeTextStub).not.toBeCalled();
+      const queryToRun =
+        "Security/CWE/CWE-020/ExternalAPIsUsedWithUntrustedData.ql";
+
+      const qlPackRootPath = join(process.env.TEST_CODEQL_PATH, "java/ql/src");
+      const queryPath = join(qlPackRootPath, queryToRun);
+      const qlPackFilePath = join(qlPackRootPath, "qlpack.yml");
+      await doVariantAnalysisTest({
+        queryPaths: [queryPath],
+        qlPackRootPath,
+        qlPackFilePath,
+        expectedPackName: "codeql/java-queries",
+        filesThatExist: [queryToRun],
+        filesThatDoNotExist: [],
+        qlxFilesThatExist: [],
+        dependenciesToCheck: ["codeql/java-all"],
+        // Don't check the version since it will be the same version
+        checkVersion: false,
       });
     });
 
-    describe("when the variant analysis has repositories with results", () => {
-      const scannedRepos = [
-        {
-          ...createMockScannedRepo("pear"),
-          resultCount: 100,
-        },
-        {
-          ...createMockScannedRepo("apple"),
-          resultCount: 0,
-        },
-        {
-          ...createMockScannedRepo("citrus"),
-          resultCount: 200,
-        },
-        {
-          ...createMockScannedRepo("sky"),
-          resultCount: undefined,
-        },
-        {
-          ...createMockScannedRepo("banana"),
-          resultCount: 5,
-        },
-      ];
-
-      beforeEach(async () => {
-        await variantAnalysisManager.rehydrateVariantAnalysis({
-          ...variantAnalysis,
-          scannedRepos,
-        });
-      });
-
-      it("should copy text", async () => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysis.id,
-        );
-
-        expect(writeTextStub).toBeCalledTimes(1);
-      });
-
-      it("should be valid JSON when put in object", async () => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysis.id,
-        );
-
-        const text = writeTextStub.mock.calls[0][0];
-
-        const parsed = JSON.parse(`${text}`);
-
-        expect(parsed).toEqual({
-          name: "new-repo-list",
-          repositories: [
-            scannedRepos[4].repository.fullName,
-            scannedRepos[2].repository.fullName,
-            scannedRepos[0].repository.fullName,
-          ],
-        });
-      });
-
-      it("should use the sort key", async () => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysis.id,
-          {
-            ...defaultFilterSortState,
-            sortKey: SortKey.ResultsCount,
-          },
-        );
-
-        const text = writeTextStub.mock.calls[0][0];
-
-        const parsed = JSON.parse(`${text}`);
-
-        expect(parsed).toEqual({
-          name: "new-repo-list",
-          repositories: [
-            scannedRepos[2].repository.fullName,
-            scannedRepos[0].repository.fullName,
-            scannedRepos[4].repository.fullName,
-          ],
-        });
-      });
-
-      it("should use the search value", async () => {
-        await variantAnalysisManager.copyRepoListToClipboard(
-          variantAnalysis.id,
-          {
-            ...defaultFilterSortState,
-            searchValue: "ban",
-          },
-        );
-
-        const text = writeTextStub.mock.calls[0][0];
-
-        const parsed = JSON.parse(`${text}`);
-
-        expect(parsed).toEqual({
-          name: "new-repo-list",
-          repositories: [scannedRepos[4].repository.fullName],
-        });
+    it("should run multiple queries that are part of the same pack", async () => {
+      await doVariantAnalysisTest({
+        queryPaths: [
+          "data-qlpack-multiple-queries/query1.ql",
+          "data-qlpack-multiple-queries/query2.ql",
+        ],
+        qlPackRootPath: "data-qlpack-multiple-queries",
+        qlPackFilePath: "data-qlpack-multiple-queries/codeql-pack.yml",
+        expectedPackName: "github/remote-query-pack",
+        filesThatExist: ["query1.ql", "query2.ql"],
+        filesThatDoNotExist: [],
+        qlxFilesThatExist: ["query1.qlx", "query2.qlx"],
+        dependenciesToCheck: ["codeql/javascript-all"],
       });
     });
-  });
 
-  describe("openQueryText", () => {
-    let variantAnalysis: VariantAnalysis;
-    let variantAnalysisStorageLocation: string;
+    async function doVariantAnalysisTest({
+      queryPaths,
+      qlPackRootPath,
+      qlPackFilePath,
+      expectedPackName,
+      filesThatExist,
+      qlxFilesThatExist,
+      filesThatDoNotExist,
 
-    let showTextDocumentSpy: jest.SpiedFunction<typeof window.showTextDocument>;
-    let openTextDocumentSpy: jest.SpiedFunction<
-      typeof workspace.openTextDocument
-    >;
+      // A subset of dependencies that we expect should be in the qlpack file.
+      // The first dependency is assumed to be the core library.
+      dependenciesToCheck = ["codeql/javascript-all"],
+      checkVersion = true,
+    }: {
+      queryPaths: string[];
+      qlPackRootPath: string;
+      qlPackFilePath: string | undefined;
+      expectedPackName: string;
+      filesThatExist: string[];
+      qlxFilesThatExist: string[];
+      filesThatDoNotExist: string[];
+      dependenciesToCheck?: string[];
+      checkVersion?: boolean;
+    }) {
+      const filePaths = queryPaths.map(getFileOrDir);
+      const qlPackDetails: QlPackDetails = {
+        queryFiles: filePaths,
+        qlPackRootPath: getFileOrDir(qlPackRootPath),
+        qlPackFilePath: qlPackFilePath && getFileOrDir(qlPackFilePath),
+        language: QueryLanguage.Javascript,
+      };
 
-    beforeEach(async () => {
-      variantAnalysis = createMockVariantAnalysis({});
-
-      variantAnalysisStorageLocation =
-        variantAnalysisManager.getVariantAnalysisStorageLocation(
-          variantAnalysis.id,
-        );
-      await createTimestampFile(variantAnalysisStorageLocation);
-      await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
-
-      showTextDocumentSpy = jest
-        .spyOn(window, "showTextDocument")
-        .mockResolvedValue(undefined as unknown as TextEditor);
-      openTextDocumentSpy = jest
-        .spyOn(workspace, "openTextDocument")
-        .mockResolvedValue(undefined as unknown as TextDocument);
-    });
-
-    afterEach(() => {
-      fs.rmSync(variantAnalysisStorageLocation, { recursive: true });
-    });
-
-    it("opens the query text", async () => {
-      await variantAnalysisManager.openQueryText(variantAnalysis.id);
-
-      expect(showTextDocumentSpy).toHaveBeenCalledTimes(1);
-      expect(openTextDocumentSpy).toHaveBeenCalledTimes(1);
-
-      const uri: Uri = openTextDocumentSpy.mock.calls[0][0] as Uri;
-      expect(uri.scheme).toEqual("codeql-variant-analysis");
-      expect(uri.path).toEqual(variantAnalysis.query.filePath);
-      const params = new URLSearchParams(uri.query);
-      expect(Array.from(params.keys())).toEqual(["variantAnalysisId"]);
-      expect(params.get("variantAnalysisId")).toEqual(
-        variantAnalysis.id.toString(),
+      await variantAnalysisManager.runVariantAnalysis(
+        qlPackDetails,
+        progress,
+        cancellationTokenSource.token,
       );
-    });
-  });
 
-  describe("openQueryFile", () => {
-    let variantAnalysis: VariantAnalysis;
-    let variantAnalysisStorageLocation: string;
+      expect(mockSubmitVariantAnalysis).toHaveBeenCalledTimes(1);
+      expect(executeCommandSpy).toHaveBeenCalledWith(
+        "codeQL.monitorNewVariantAnalysis",
+        expect.objectContaining({
+          query: expect.objectContaining({ filePath: filePaths[0] }),
+        }),
+      );
 
-    let showTextDocumentSpy: jest.SpiedFunction<typeof window.showTextDocument>;
-    let openTextDocumentSpy: jest.SpiedFunction<
-      typeof workspace.openTextDocument
-    >;
+      const request: VariantAnalysisSubmission =
+        mockSubmitVariantAnalysis.mock.calls[0][1];
 
-    beforeEach(async () => {
-      variantAnalysis = createMockVariantAnalysis({});
+      const packFS = await readBundledPack(request.pack);
+      filesThatExist.forEach((file) => {
+        expect(file).toExistInCodeQLPack(packFS);
+      });
 
-      variantAnalysisStorageLocation =
-        variantAnalysisManager.getVariantAnalysisStorageLocation(
-          variantAnalysis.id,
-        );
-      await createTimestampFile(variantAnalysisStorageLocation);
-      await variantAnalysisManager.rehydrateVariantAnalysis(variantAnalysis);
+      qlxFilesThatExist.forEach((file) => {
+        expect(file).toExistInCodeQLPack(packFS);
+      });
+      filesThatDoNotExist.forEach((file) => {
+        expect(file).not.toExistInCodeQLPack(packFS);
+      });
 
-      showTextDocumentSpy = jest
-        .spyOn(window, "showTextDocument")
-        .mockResolvedValue(undefined as unknown as TextEditor);
-      openTextDocumentSpy = jest
-        .spyOn(workspace, "openTextDocument")
-        .mockResolvedValue(undefined as unknown as TextDocument);
-    });
+      expect(
+        packFS.fileExists("qlpack.yml") || packFS.fileExists("codeql-pack.yml"),
+      ).toBe(true);
 
-    afterEach(() => {
-      fs.rmSync(variantAnalysisStorageLocation, { recursive: true });
-    });
+      // depending on the cli version, we should have one of these files
+      expect(
+        packFS.fileExists("qlpack.lock.yml") ||
+          packFS.fileExists("codeql-pack.lock.yml"),
+      ).toBe(true);
 
-    it("opens the query file", async () => {
-      await variantAnalysisManager.openQueryFile(variantAnalysis.id);
+      const packFileName = packFS.fileExists("qlpack.yml")
+        ? "qlpack.yml"
+        : "codeql-pack.yml";
+      const qlpackContents = load(
+        packFS.fileContents(packFileName).toString("utf-8"),
+      ) as ExtensionPackMetadata;
+      expect(qlpackContents.name).toEqual(expectedPackName);
+      if (checkVersion) {
+        expect(qlpackContents.version).toEqual("0.0.0");
+      }
 
-      expect(showTextDocumentSpy).toHaveBeenCalledTimes(1);
-      expect(openTextDocumentSpy).toHaveBeenCalledTimes(1);
+      // Assume the first dependency to check is the core library.
+      if (dependenciesToCheck.length > 0) {
+        const dependencyVersion =
+          qlpackContents.dependencies?.[dependenciesToCheck[0]];
 
-      const filename: string = openTextDocumentSpy.mock.calls[0][0] as string;
-      expect(filename).toEqual(variantAnalysis.query.filePath);
-    });
+        // There should be a version specified.
+        expect(dependencyVersion).toBeDefined();
+
+        // Any `${workspace}` placeholder should have been replaced.
+        // The actual version might be `*` (for the legacy code path where we replace workspace
+        // references with `*`) or a specific version (for the new code path where the CLI does all
+        // the work).
+        expect(dependencyVersion).not.toEqual("${workspace}");
+      }
+      const qlpackLockContents = load(
+        packFS.fileContents("codeql-pack.lock.yml").toString("utf-8"),
+      ) as QlPackLockFile;
+
+      const actualLockKeys = Object.keys(qlpackLockContents.dependencies ?? {});
+
+      // The lock file should contain at least the specified dependencies.
+      dependenciesToCheck.forEach((dep) =>
+        expect(actualLockKeys).toContain(dep),
+      );
+    }
+
+    function getFileOrDir(path: string): string {
+      // Use `Uri.file(path).fsPath` to make sure the path is in the correct format for the OS (i.e. forward/backward slashes).
+      if (isAbsolute(path)) {
+        return Uri.file(path).fsPath;
+      } else {
+        return Uri.file(join(baseDir, path)).fsPath;
+      }
+    }
   });
 });

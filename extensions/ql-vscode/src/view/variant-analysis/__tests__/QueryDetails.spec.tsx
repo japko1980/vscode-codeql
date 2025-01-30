@@ -1,7 +1,7 @@
-import * as React from "react";
 import { render as reactRender, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { QueryDetails, QueryDetailsProps } from "../QueryDetails";
+import { userEvent } from "@testing-library/user-event";
+import type { QueryDetailsProps } from "../QueryDetails";
+import { QueryDetails } from "../QueryDetails";
 
 describe(QueryDetails.name, () => {
   const onOpenQueryFileClick = jest.fn();

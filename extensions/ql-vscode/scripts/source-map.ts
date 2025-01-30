@@ -19,8 +19,9 @@
 import { spawnSync } from "child_process";
 import { basename, resolve } from "path";
 import { pathExists, readJSON } from "fs-extra";
-import { RawSourceMap, SourceMapConsumer } from "source-map";
-import { Open } from "unzipper";
+import type { RawSourceMap } from "source-map";
+import { SourceMapConsumer } from "source-map";
+import { unzipToDirectorySequentially } from "../src/common/unzip";
 
 if (process.argv.length !== 4) {
   console.error(
@@ -40,6 +41,7 @@ async function extractSourceMap() {
   const releaseAssetsDirectory = resolve(
     __dirname,
     "..",
+    "artifacts",
     "release-assets",
     versionNumber,
   );
@@ -63,7 +65,9 @@ async function extractSourceMap() {
     ]);
 
     const sourcemapAsset = release.assets.find(
-      (asset) => asset.name === `vscode-codeql-sourcemaps-${versionNumber}.zip`,
+      (asset) =>
+        asset.label === `vscode-codeql-sourcemaps-${versionNumber}.zip` ||
+        asset.name === "vscode-codeql-sourcemaps.zip",
     );
 
     if (sourcemapAsset) {
@@ -78,10 +82,10 @@ async function extractSourceMap() {
         releaseAssetsDirectory,
       ]);
 
-      const file = await Open.file(
+      await unzipToDirectorySequentially(
         resolve(releaseAssetsDirectory, sourcemapAsset.name),
+        sourceMapsDirectory,
       );
-      await file.extract({ path: sourceMapsDirectory });
     } else {
       const workflowRuns = runGhJSON<WorkflowRunListItem[]>([
         "run",
@@ -115,21 +119,35 @@ async function extractSourceMap() {
   }
 
   if (stacktrace.includes("at")) {
-    const rawSourceMaps = new Map<string, RawSourceMap>();
+    const rawSourceMaps = new Map<string, RawSourceMap | null>();
 
     const mappedStacktrace = await replaceAsync(
       stacktrace,
       stackLineRegex,
       async (match, name, file, line, column) => {
         if (!rawSourceMaps.has(file)) {
-          const rawSourceMap: RawSourceMap = await readJSON(
-            resolve(sourceMapsDirectory, `${basename(file)}.map`),
-          );
-          rawSourceMaps.set(file, rawSourceMap);
+          try {
+            const rawSourceMap: RawSourceMap = await readJSON(
+              resolve(sourceMapsDirectory, `${basename(file)}.map`),
+            );
+            rawSourceMaps.set(file, rawSourceMap);
+          } catch (e: unknown) {
+            // If the file is not found, we will not decode it and not try reading this source map again
+            if (e instanceof Error && "code" in e && e.code === "ENOENT") {
+              rawSourceMaps.set(file, null);
+            } else {
+              throw e;
+            }
+          }
+        }
+
+        const sourceMap = rawSourceMaps.get(file);
+        if (!sourceMap) {
+          return match;
         }
 
         const originalPosition = await SourceMapConsumer.with(
-          rawSourceMaps.get(file) as RawSourceMap,
+          sourceMap,
           null,
           async function (consumer) {
             return consumer.originalPositionFor({
@@ -198,9 +216,7 @@ extractSourceMap().catch((e: unknown) => {
 function runGh(args: readonly string[]): string {
   const gh = spawnSync("gh", args);
   if (gh.status !== 0) {
-    throw new Error(
-      `Failed to get the source map for ${versionNumber}: ${gh.stderr}`,
-    );
+    throw new Error(`Failed to run gh ${args.join(" ")}: ${gh.stderr}`);
   }
   return gh.stdout.toString("utf-8");
 }
@@ -212,6 +228,7 @@ function runGhJSON<T>(args: readonly string[]): T {
 type ReleaseAsset = {
   id: string;
   name: string;
+  label: string;
 };
 
 type Release = {
@@ -228,7 +245,7 @@ type WorkflowRunListItem = {
 async function replaceAsync(
   str: string,
   regex: RegExp,
-  replacer: (substring: string, ...args: any[]) => Promise<string>,
+  replacer: (substring: string, ...args: string[]) => Promise<string>,
 ) {
   const promises: Array<Promise<string>> = [];
   str.replace(regex, (match, ...args) => {

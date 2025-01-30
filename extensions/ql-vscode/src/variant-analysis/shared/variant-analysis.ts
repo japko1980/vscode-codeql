@@ -1,16 +1,20 @@
-import { Repository, RepositoryWithMetadata } from "./repository";
-import { AnalysisAlert, AnalysisRawResults } from "./analysis-result";
+import type { Repository, RepositoryWithMetadata } from "./repository";
+import type { AnalysisAlert, AnalysisRawResults } from "./analysis-result";
 import { QueryLanguage } from "../../common/query-language";
+import type { ModelPackDetails } from "../../common/model-pack-details";
 
 export interface VariantAnalysis {
   id: number;
   controllerRepo: Repository;
+  language: QueryLanguage;
   query: {
     name: string;
     filePath: string;
-    language: QueryLanguage;
     text: string;
+    kind?: string;
   };
+  queries?: VariantAnalysisQueries;
+  modelPacks?: ModelPackDetails[];
   databases: {
     repositories?: string[];
     repositoryLists?: string[];
@@ -37,6 +41,7 @@ export enum VariantAnalysisStatus {
   InProgress = "inProgress",
   Succeeded = "succeeded",
   Failed = "failed",
+  Canceling = "canceling",
   Canceled = "canceled",
 }
 
@@ -133,20 +138,30 @@ export interface VariantAnalysisSubmission {
   startTime: number;
   controllerRepoId: number;
   actionRepoRef: string;
+  language: QueryLanguage;
+  /** Base64 encoded query pack. */
+  pack: string;
   query: {
     name: string;
     filePath: string;
-    language: QueryLanguage;
     text: string;
-
-    // Base64 encoded query pack.
-    pack: string;
+    kind?: string;
   };
+  queries?: VariantAnalysisQueries;
   databases: {
     repositories?: string[];
     repositoryLists?: string[];
     repositoryOwners?: string[];
   };
+}
+
+// Experimental information about the queries that are
+// going to be run as part of the variant analysis.
+// For now, this is just the query language, but it's
+// unclear what it will look like in the future.
+export interface VariantAnalysisQueries {
+  language: QueryLanguage;
+  count: number;
 }
 
 export async function isVariantAnalysisComplete(
@@ -216,12 +231,26 @@ export function hasRepoScanCompleted(
 
 /**
  * @param repo
+ * @returns whether the repo scan completed successfully
+ */
+export function isRepoScanSuccessful(
+  repo: VariantAnalysisScannedRepository,
+): boolean {
+  return repo.analysisStatus === VariantAnalysisRepoStatus.Succeeded;
+}
+
+/**
+ * @param repo
  * @returns whether the repo scan has an artifact that can be downloaded
  */
 export function repoHasDownloadableArtifact(
   repo: VariantAnalysisScannedRepository,
 ): boolean {
-  return repo.analysisStatus === VariantAnalysisRepoStatus.Succeeded;
+  return (
+    repo.analysisStatus === VariantAnalysisRepoStatus.Succeeded &&
+    repo.resultCount !== undefined &&
+    repo.resultCount > 0
+  );
 }
 
 /**
@@ -266,10 +295,14 @@ export function getSkippedRepoCount(
 
 export function getActionsWorkflowRunUrl(
   variantAnalysis: VariantAnalysis,
+  githubUrl: URL,
 ): string {
   const {
     actionsWorkflowRunId,
     controllerRepo: { fullName },
   } = variantAnalysis;
-  return `https://github.com/${fullName}/actions/runs/${actionsWorkflowRunId}`;
+  return new URL(
+    `/${fullName}/actions/runs/${actionsWorkflowRunId}`,
+    githubUrl,
+  ).toString();
 }

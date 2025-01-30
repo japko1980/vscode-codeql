@@ -1,7 +1,6 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 
-import {
+import type {
   AnalysisMessage,
   HighlightedRegion,
   ResultSeverity,

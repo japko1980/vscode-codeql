@@ -1,18 +1,17 @@
-import * as React from "react";
-import { ReactNode } from "react";
-import styled from "styled-components";
+import type { ReactNode } from "react";
+import { styled } from "styled-components";
 
 type ContainerProps = {
-  type: "warning" | "error";
-  inverse?: boolean;
+  $type: "warning" | "error";
+  $inverse?: boolean;
 };
 
-const getBackgroundColor = ({ type, inverse }: ContainerProps): string => {
-  if (!inverse) {
+const getBackgroundColor = ({ $type, $inverse }: ContainerProps): string => {
+  if (!$inverse) {
     return "var(--vscode-notifications-background)";
   }
 
-  switch (type) {
+  switch ($type) {
     case "warning":
       return "var(--vscode-editorWarning-foreground)";
     case "error":
@@ -20,12 +19,12 @@ const getBackgroundColor = ({ type, inverse }: ContainerProps): string => {
   }
 };
 
-const getTextColor = ({ type, inverse }: ContainerProps): string => {
-  if (!inverse) {
+const getTextColor = ({ $type, $inverse }: ContainerProps): string => {
+  if (!$inverse) {
     return "var(--vscode-editor-foreground)";
   }
 
-  switch (type) {
+  switch ($type) {
     case "warning":
       return "var(--vscode-editor-background)";
     case "error":
@@ -33,8 +32,8 @@ const getTextColor = ({ type, inverse }: ContainerProps): string => {
   }
 };
 
-const getBorderColor = ({ type }: ContainerProps): string => {
-  switch (type) {
+const getBorderColor = ({ $type }: ContainerProps): string => {
+  switch ($type) {
     case "warning":
       return "var(--vscode-editorWarning-foreground)";
     case "error":
@@ -42,7 +41,7 @@ const getBorderColor = ({ type }: ContainerProps): string => {
   }
 };
 
-const getTypeText = (type: ContainerProps["type"]): string => {
+const getTypeText = (type: ContainerProps["$type"]): string => {
   switch (type) {
     case "warning":
       return "Warning";
@@ -85,11 +84,30 @@ type Props = {
 
   // Inverse the color scheme
   inverse?: boolean;
+
+  /**
+   * Role is used as the ARIA role. "alert" should only be set if the alert requires
+   * the user's immediate attention. "status" should be set if the alert is not
+   * important enough to require the user's immediate attention.
+   *
+   * Can be left out if the alert is not important enough to require the user's
+   * immediate attention. In this case, no ARIA role will be set and the alert
+   * will be read as normal text. The user will not be notified about any changes
+   * to the alert.
+   */
+  role?: "alert" | "status";
 };
 
-export const Alert = ({ type, title, message, actions, inverse }: Props) => {
+export const Alert = ({
+  type,
+  title,
+  message,
+  actions,
+  inverse,
+  role,
+}: Props) => {
   return (
-    <Container type={type} inverse={inverse}>
+    <Container $type={type} $inverse={inverse} role={role}>
       <Title>
         {getTypeText(type)}: {title}
       </Title>

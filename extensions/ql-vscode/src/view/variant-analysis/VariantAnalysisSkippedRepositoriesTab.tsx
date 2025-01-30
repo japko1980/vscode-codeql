@@ -1,14 +1,13 @@
-import * as React from "react";
 import { useMemo } from "react";
-import styled from "styled-components";
-import { VariantAnalysisSkippedRepositoryGroup } from "../../variant-analysis/shared/variant-analysis";
+import { styled } from "styled-components";
+import type { VariantAnalysisSkippedRepositoryGroup } from "../../variant-analysis/shared/variant-analysis";
 import { Alert } from "../common";
 import { RepoRow } from "./RepoRow";
+import type { RepositoriesFilterSortState } from "../../variant-analysis/shared/variant-analysis-filter-sort";
 import {
   compareRepository,
   matchesFilter,
-  RepositoriesFilterSortState,
-} from "../../pure/variant-analysis-filter-sort";
+} from "../../variant-analysis/shared/variant-analysis-filter-sort";
 
 export type VariantAnalysisSkippedRepositoriesTabProps = {
   alertTitle: string;
@@ -56,8 +55,8 @@ export const VariantAnalysisSkippedRepositoriesTab = ({
 }: VariantAnalysisSkippedRepositoriesTabProps) => {
   const repositories = useMemo(() => {
     return skippedRepositoryGroup.repositories
-      ?.filter((repo) => {
-        return matchesFilter(repo, filterSortState);
+      ?.filter((repository) => {
+        return matchesFilter({ repository }, filterSortState);
       })
       ?.sort(compareRepository(filterSortState));
   }, [filterSortState, skippedRepositoryGroup.repositories]);

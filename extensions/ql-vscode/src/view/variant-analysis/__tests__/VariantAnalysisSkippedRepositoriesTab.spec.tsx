@@ -1,13 +1,8 @@
-import * as React from "react";
 import { render as reactRender, screen } from "@testing-library/react";
-import {
-  VariantAnalysisSkippedRepositoriesTab,
-  VariantAnalysisSkippedRepositoriesTabProps,
-} from "../VariantAnalysisSkippedRepositoriesTab";
-import {
-  defaultFilterSortState,
-  SortKey,
-} from "../../../pure/variant-analysis-filter-sort";
+import type { VariantAnalysisSkippedRepositoriesTabProps } from "../VariantAnalysisSkippedRepositoriesTab";
+import { VariantAnalysisSkippedRepositoriesTab } from "../VariantAnalysisSkippedRepositoriesTab";
+import { SortKey } from "../../../variant-analysis/shared/variant-analysis-filter-sort";
+import { permissiveFilterSortState } from "../../../../test/unit-tests/variant-analysis-filter-sort.test";
 
 describe(VariantAnalysisSkippedRepositoriesTab.name, () => {
   const render = (props: VariantAnalysisSkippedRepositoriesTabProps) =>
@@ -142,7 +137,7 @@ describe(VariantAnalysisSkippedRepositoriesTab.name, () => {
         ],
       },
       filterSortState: {
-        ...defaultFilterSortState,
+        ...permissiveFilterSortState,
         searchValue: "world",
       },
     });
@@ -177,8 +172,8 @@ describe(VariantAnalysisSkippedRepositoriesTab.name, () => {
         ],
       },
       filterSortState: {
-        ...defaultFilterSortState,
-        sortKey: SortKey.Stars,
+        ...permissiveFilterSortState,
+        sortKey: SortKey.Popularity,
       },
     });
 
@@ -190,7 +185,7 @@ describe(VariantAnalysisSkippedRepositoriesTab.name, () => {
     expect(rows[2]).toHaveTextContent("octodemo/hello-galaxy");
   });
 
-  it("does not use the result count sort key", async () => {
+  it("does not use the 'number of results' sort key", async () => {
     render({
       alertTitle: "No database",
       alertMessage:
@@ -210,8 +205,8 @@ describe(VariantAnalysisSkippedRepositoriesTab.name, () => {
         ],
       },
       filterSortState: {
-        ...defaultFilterSortState,
-        sortKey: SortKey.ResultsCount,
+        ...permissiveFilterSortState,
+        sortKey: SortKey.NumberOfResults,
       },
     });
 

@@ -1,6 +1,4 @@
-import * as React from "react";
-
-import {
+import type {
   AnalysisMessage,
   CodeFlow,
   ResultSeverity,

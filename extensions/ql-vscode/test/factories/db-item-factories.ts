@@ -1,17 +1,13 @@
 import { faker } from "@faker-js/faker";
-import {
-  DbItemKind,
-  LocalDatabaseDbItem,
-  LocalDbItem,
-  LocalListDbItem,
+import type {
   RemoteDbItem,
   RemoteOwnerDbItem,
   RemoteRepoDbItem,
   RemoteSystemDefinedListDbItem,
   RemoteUserDefinedListDbItem,
-  RootLocalDbItem,
   RootRemoteDbItem,
 } from "../../src/databases/db-item";
+import { DbItemKind } from "../../src/databases/db-item";
 
 // Root Remote Db Items
 export function createRootRemoteDbItem({
@@ -29,7 +25,7 @@ export function createRootRemoteDbItem({
 }
 
 export function createRemoteOwnerDbItem({
-  ownerName = `owner${faker.datatype.number()}`,
+  ownerName = `owner${faker.number.int()}`,
   selected = false,
 }: {
   ownerName?: string;
@@ -43,7 +39,7 @@ export function createRemoteOwnerDbItem({
 }
 
 export function createRemoteRepoDbItem({
-  repoFullName = `owner${faker.datatype.number()}/repo${faker.datatype.number}`,
+  repoFullName = `owner${faker.number.int()}/repo${faker.number.int()}`,
   selected = false,
   parentListName = undefined,
 }: {
@@ -60,7 +56,7 @@ export function createRemoteRepoDbItem({
 }
 
 export function createRemoteSystemDefinedListDbItem({
-  listName = `top_${faker.datatype.number()}`,
+  listName = `top_${faker.number.int()}`,
   listDisplayName = `Display Name`,
   listDescription = `Description`,
   selected = false,
@@ -82,7 +78,7 @@ export function createRemoteSystemDefinedListDbItem({
 export function createRemoteUserDefinedListDbItem({
   expanded = false,
   selected = false,
-  listName = `list${faker.datatype.number()}`,
+  listName = `list${faker.number.int()}`,
   repos = [
     createRemoteRepoDbItem({
       parentListName: listName,
@@ -100,63 +96,5 @@ export function createRemoteUserDefinedListDbItem({
     selected,
     listName,
     repos,
-  };
-}
-
-// Root Local Db Items
-export function createRootLocalDbItem({
-  children = [],
-  expanded = false,
-}: {
-  children?: LocalDbItem[];
-  expanded?: boolean;
-} = {}): RootLocalDbItem {
-  return {
-    kind: DbItemKind.RootLocal,
-    children,
-    expanded,
-  };
-}
-
-export function createLocalDatabaseDbItem({
-  databaseName = `database${faker.datatype.number()}`,
-  dateAdded = faker.date.past().getTime(),
-  language = `language${faker.datatype.number()}`,
-  storagePath = `storagePath${faker.datatype.number()}`,
-  selected = false,
-}: {
-  databaseName?: string;
-  dateAdded?: number;
-  language?: string;
-  storagePath?: string;
-  selected?: boolean;
-} = {}): LocalDatabaseDbItem {
-  return {
-    kind: DbItemKind.LocalDatabase,
-    selected,
-    databaseName,
-    dateAdded,
-    language,
-    storagePath,
-  };
-}
-
-export function createLocalListDbItem({
-  listName = `top_${faker.datatype.number()}`,
-  selected = false,
-  expanded = false,
-  databases = [],
-}: {
-  listName?: string;
-  databases?: LocalDatabaseDbItem[];
-  selected?: boolean;
-  expanded?: boolean;
-} = {}): LocalListDbItem {
-  return {
-    kind: DbItemKind.LocalList,
-    selected,
-    expanded,
-    databases,
-    listName,
   };
 }

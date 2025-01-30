@@ -1,7 +1,11 @@
 import { readdirSync, readFileSync } from "fs-extra";
 import { join } from "path";
-import * as tmp from "tmp";
-import { OutputChannelLogger } from "../../../src/common";
+import type { DirResult } from "tmp";
+import { dirSync } from "tmp";
+import type { BaseLogger, Logger } from "../../../src/common/logging";
+import { TeeLogger } from "../../../src/common/logging";
+import { OutputChannelLogger } from "../../../src/common/logging/vscode";
+import type { Disposable } from "../../../src/common/disposable-object";
 
 jest.setTimeout(999999);
 
@@ -28,14 +32,14 @@ jest.mock(
 );
 
 describe("OutputChannelLogger tests", function () {
-  const tempFolders: Record<string, tmp.DirResult> = {};
+  const tempFolders: Record<string, DirResult> = {};
   let logger: any;
 
   beforeEach(async () => {
-    tempFolders.globalStoragePath = tmp.dirSync({
+    tempFolders.globalStoragePath = dirSync({
       prefix: "logging-tests-global",
     });
-    tempFolders.storagePath = tmp.dirSync({
+    tempFolders.storagePath = dirSync({
       prefix: "logging-tests-workspace",
     });
     logger = new OutputChannelLogger("test-logger");
@@ -46,28 +50,33 @@ describe("OutputChannelLogger tests", function () {
     tempFolders.storagePath.removeCallback();
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const mockOutputChannel = require("vscode").mockOutputChannel;
 
   it("should log to the output channel", async () => {
     await logger.log("xxx");
-    expect(mockOutputChannel.appendLine).toBeCalledWith("xxx");
-    expect(mockOutputChannel.append).not.toBeCalledWith("xxx");
+    expect(mockOutputChannel.appendLine).toHaveBeenCalledWith("xxx");
+    expect(mockOutputChannel.append).not.toHaveBeenCalledWith("xxx");
 
     await logger.log("yyy", { trailingNewline: false });
-    expect(mockOutputChannel.appendLine).not.toBeCalledWith("yyy");
-    expect(mockOutputChannel.append).toBeCalledWith("yyy");
+    expect(mockOutputChannel.appendLine).not.toHaveBeenCalledWith("yyy");
+    expect(mockOutputChannel.append).toHaveBeenCalledWith("yyy");
 
-    await logger.log("zzz", createLogOptions("hucairz"));
+    const hucairz = createSideLogger(logger, "hucairz");
+    await hucairz.log("zzz");
 
     // should have created 1 side log
     expect(readdirSync(tempFolders.storagePath.name)).toEqual(["hucairz"]);
+
+    hucairz.dispose();
   });
 
   it("should create a side log", async () => {
-    await logger.log("xxx", createLogOptions("first"));
-    await logger.log("yyy", createLogOptions("second"));
-    await logger.log("zzz", createLogOptions("first", false));
+    const first = createSideLogger(logger, "first");
+    await first.log("xxx");
+    const second = createSideLogger(logger, "second");
+    await second.log("yyy");
+    await first.log("zzz", { trailingNewline: false });
     await logger.log("aaa");
 
     // expect 2 side logs
@@ -80,18 +89,18 @@ describe("OutputChannelLogger tests", function () {
     expect(
       readFileSync(join(tempFolders.storagePath.name, "second"), "utf8"),
     ).toBe("yyy\n");
+
+    first.dispose();
+    second.dispose();
   });
 
-  function createLogOptions(
+  function createSideLogger(
+    logger: Logger,
     additionalLogLocation: string,
-    trailingNewline?: boolean,
-  ) {
-    return {
-      additionalLogLocation: join(
-        tempFolders.storagePath.name,
-        additionalLogLocation,
-      ),
-      trailingNewline,
-    };
+  ): BaseLogger & Disposable {
+    return new TeeLogger(
+      logger,
+      join(tempFolders.storagePath.name, additionalLogLocation),
+    );
   }
 });

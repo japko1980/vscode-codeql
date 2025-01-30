@@ -1,15 +1,14 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 import { VSCodeLink } from "@vscode/webview-ui-toolkit/react";
 
-import {
+import type {
   AnalysisMessage,
   CodeSnippet,
   FileLink,
   HighlightedRegion,
   ResultSeverity,
 } from "../../../variant-analysis/shared/analysis-result";
-import { createRemoteFileRef } from "../../../pure/location-link-utils";
+import { createRemoteFileRef } from "../../../common/location-link-utils";
 import { CodeSnippetMessage } from "./CodeSnippetMessage";
 import { CodeSnippetLine } from "./CodeSnippetLine";
 import { sendTelemetry } from "../telemetry";
@@ -65,6 +64,8 @@ export const FileCodeSnippet = ({
     fileLink,
     highlightedRegion?.startLine || startingLine,
     highlightedRegion?.endLine || endingLine,
+    highlightedRegion?.startColumn,
+    highlightedRegion?.endColumn,
   );
 
   if (!codeSnippet) {

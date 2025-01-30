@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/QlPackFile",
+  "definitions": {
+    "QlPackFile": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": ["string", "null"]
+        },
+        "version": {
+          "type": ["string", "null"]
+        },
+        "dependencies": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensionTargets": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dbscheme": {
+          "type": ["string", "null"]
+        },
+        "library": {
+          "type": ["boolean", "null"]
+        },
+        "defaultSuite": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/SuiteInstruction"
+              }
+            },
+            {
+              "$ref": "#/definitions/SuiteInstruction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultSuiteFile": {
+          "type": ["string", "null"]
+        },
+        "dataExtensions": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "The qlpack pack file, either in qlpack.yml or in codeql-pack.yml."
+    },
+    "SuiteInstruction": {
+      "type": "object",
+      "properties": {
+        "qlpack": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "queries": {
+          "type": "string"
+        },
+        "include": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "exclude": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "import": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        }
+      },
+      "description": "A single entry in a .qls file."
+    }
+  }
+}

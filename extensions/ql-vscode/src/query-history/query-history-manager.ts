@@ -1,70 +1,70 @@
 import { join, dirname } from "path";
-import {
-  commands,
+import type {
   Disposable,
-  env,
-  EventEmitter,
   ExtensionContext,
   ProviderResult,
-  Range,
   TreeView,
+} from "vscode";
+import {
+  env,
+  EventEmitter,
+  Range,
   Uri,
   ViewColumn,
   window,
   workspace,
 } from "vscode";
-import { QueryHistoryConfig } from "../config";
+import type { QueryHistoryConfig } from "../config";
 import {
-  showAndLogErrorMessage,
-  showAndLogExceptionWithTelemetry,
-  showAndLogInformationMessage,
-  showAndLogWarningMessage,
   showBinaryChoiceDialog,
   showInformationMessageWithAction,
-} from "../helpers";
-import { extLogger } from "../common";
+} from "../common/vscode/dialog";
 import { URLSearchParams } from "url";
-import { DisposableObject } from "../pure/disposable-object";
-import { commandRunner } from "../commandRunner";
-import { ONE_HOUR_IN_MS, TWO_HOURS_IN_MS } from "../pure/time";
-import {
-  asError,
-  assertNever,
-  getErrorMessage,
-  getErrorStack,
-} from "../pure/helpers-pure";
-import { CompletedLocalQueryInfo, LocalQueryInfo } from "../query-results";
+import { DisposableObject } from "../common/disposable-object";
+import { ONE_HOUR_IN_MS, TWO_HOURS_IN_MS } from "../common/time";
+import { assertNever, getErrorMessage } from "../common/helpers-pure";
+import type { CompletedLocalQueryInfo, LocalQueryInfo } from "../query-results";
+import type { QueryHistoryInfo } from "./query-history-info";
 import {
   getActionsWorkflowRunUrl,
   getQueryId,
   getQueryText,
-  QueryHistoryInfo,
 } from "./query-history-info";
-import { DatabaseManager } from "../local-databases";
+import type { DatabaseManager } from "../databases/local-databases";
 import { registerQueryHistoryScrubber } from "./query-history-scrubber";
 import {
   QueryStatus,
   variantAnalysisStatusToQueryStatus,
-} from "../query-status";
-import {
-  deserializeQueryHistory,
-  serializeQueryHistory,
-} from "../query-serialization";
+} from "./query-status";
+import { readQueryHistoryFromFile, writeQueryHistoryToFile } from "./store";
 import { pathExists } from "fs-extra";
-import { CliVersionConstraint } from "../cli";
-import { HistoryItemLabelProvider } from "./history-item-label-provider";
-import { ResultsView } from "../interface";
-import { WebviewReveal } from "../interface-utils";
-import { EvalLogViewer } from "../eval-log-viewer";
-import EvalLogTreeBuilder from "../eval-log-tree-builder";
-import { EvalLogData, parseViewerData } from "../pure/log-summary-parser";
-import { QueryWithResults } from "../run-queries-shared";
-import { QueryRunner } from "../queryRunner";
-import { VariantAnalysisManager } from "../variant-analysis/variant-analysis-manager";
-import { VariantAnalysisHistoryItem } from "./variant-analysis-history-item";
+import type { HistoryItemLabelProvider } from "./history-item-label-provider";
+import type { ResultsView } from "../local-queries";
+import { WebviewReveal } from "../local-queries";
+import type { EvalLogViewer } from "../query-evaluation-logging";
+import { EvalLogTreeBuilder } from "../query-evaluation-logging";
+import type { EvalLogData } from "../log-insights/log-summary-parser";
+import { parseViewerData } from "../log-insights/log-summary-parser";
+import type { QueryWithResults } from "../run-queries-shared";
+import type { QueryRunner } from "../query-server";
+import type { VariantAnalysisManager } from "../variant-analysis/variant-analysis-manager";
+import type { VariantAnalysisHistoryItem } from "./variant-analysis-history-item";
 import { getTotalResultCount } from "../variant-analysis/shared/variant-analysis";
 import { HistoryTreeDataProvider } from "./history-tree-data-provider";
-import { redactableError } from "../pure/errors";
+import type { QueryHistoryDirs } from "./query-history-dirs";
+import type { QueryHistoryCommands } from "../common/commands";
+import type { App } from "../common/app";
+import { tryOpenExternalFile } from "../common/vscode/external-files";
+import {
+  createMultiSelectionCommand,
+  createSingleSelectionCommand,
+} from "../common/vscode/selection-commands";
+import {
+  showAndLogErrorMessage,
+  showAndLogInformationMessage,
+  showAndLogWarningMessage,
+} from "../common/logging";
+import type { LanguageContextStore } from "../language-context-store";
 
 /**
  * query-history-manager.ts
@@ -97,7 +97,7 @@ const SHOW_QUERY_TEXT_QUICK_EVAL_MSG = `\
 
 `;
 
-export enum SortOrder {
+enum SortOrder {
   NameAsc = "NameAsc",
   NameDesc = "NameDesc",
   DateAsc = "DateAsc",
@@ -134,18 +134,24 @@ export class QueryHistoryManager extends DisposableObject {
   readonly onDidCompleteQuery = this._onDidCompleteQuery.event;
 
   constructor(
+    private readonly app: App,
     private readonly qs: QueryRunner,
     private readonly dbm: DatabaseManager,
     private readonly localQueriesResultsView: ResultsView,
     private readonly variantAnalysisManager: VariantAnalysisManager,
     private readonly evalLogViewer: EvalLogViewer,
-    private readonly queryStorageDir: string,
+    private readonly queryHistoryDirs: QueryHistoryDirs,
     ctx: ExtensionContext,
     private readonly queryHistoryConfigListener: QueryHistoryConfig,
     private readonly labelProvider: HistoryItemLabelProvider,
+    private readonly languageContext: LanguageContextStore,
     private readonly doCompareCallback: (
       from: CompletedLocalQueryInfo,
       to: CompletedLocalQueryInfo,
+    ) => Promise<void>,
+    private readonly doComparePerformanceCallback: (
+      from: CompletedLocalQueryInfo,
+      to: CompletedLocalQueryInfo | undefined,
     ) => Promise<void>,
   ) {
     super();
@@ -160,7 +166,7 @@ export class QueryHistoryManager extends DisposableObject {
     );
 
     this.treeDataProvider = this.push(
-      new HistoryTreeDataProvider(this.labelProvider),
+      new HistoryTreeDataProvider(this.labelProvider, this.languageContext),
     );
     this.treeView = this.push(
       window.createTreeView("codeQLQueryHistory", {
@@ -200,141 +206,6 @@ export class QueryHistoryManager extends DisposableObject {
       }),
     );
 
-    void extLogger.log("Registering query history panel commands.");
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.openQuery",
-        this.handleOpenQuery.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.removeHistoryItem",
-        this.handleRemoveHistoryItem.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.sortByName",
-        this.handleSortByName.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.sortByDate",
-        this.handleSortByDate.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.sortByCount",
-        this.handleSortByCount.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.renameItem",
-        this.handleRenameItem.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.compareWith",
-        this.handleCompareWith.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.showQueryLog",
-        this.handleShowQueryLog.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.openQueryDirectory",
-        this.handleOpenQueryDirectory.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.showEvalLog",
-        this.handleShowEvalLog.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.showEvalLogSummary",
-        this.handleShowEvalLogSummary.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.showEvalLogViewer",
-        this.handleShowEvalLogViewer.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner("codeQLQueryHistory.cancel", this.handleCancel.bind(this)),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.showQueryText",
-        this.handleShowQueryText.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.exportResults",
-        this.handleExportResults.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.viewCsvResults",
-        this.handleViewCsvResults.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.viewCsvAlerts",
-        this.handleViewCsvAlerts.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.viewSarifAlerts",
-        this.handleViewSarifAlerts.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.viewDil",
-        this.handleViewDil.bind(this),
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.itemClicked",
-        async (item: LocalQueryInfo) => {
-          return this.handleItemClicked(item, [item]);
-        },
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.openOnGithub",
-        async (item: LocalQueryInfo) => {
-          return this.handleOpenOnGithub(item, [item]);
-        },
-      ),
-    );
-    this.push(
-      commandRunner(
-        "codeQLQueryHistory.copyRepoList",
-        this.handleCopyRepoList.bind(this),
-      ),
-    );
-
     // There are two configuration items that affect the query history:
     // 1. The ttl for query history items.
     // 2. The default label for query history items.
@@ -367,6 +238,114 @@ export class QueryHistoryManager extends DisposableObject {
 
     this.registerQueryHistoryScrubber(queryHistoryConfigListener, this, ctx);
     this.registerToVariantAnalysisEvents();
+
+    this.push(
+      this.languageContext.onLanguageContextChanged(async () => {
+        this.treeDataProvider.refresh();
+      }),
+    );
+  }
+
+  public getCommands(): QueryHistoryCommands {
+    return {
+      "codeQLQueryHistory.sortByName": this.handleSortByName.bind(this),
+      "codeQLQueryHistory.sortByDate": this.handleSortByDate.bind(this),
+      "codeQLQueryHistory.sortByCount": this.handleSortByCount.bind(this),
+
+      "codeQLQueryHistory.openQueryContextMenu": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleOpenQuery.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.removeHistoryItemContextMenu":
+        createMultiSelectionCommand(this.handleRemoveHistoryItem.bind(this)),
+      "codeQLQueryHistory.removeHistoryItemContextInline":
+        createMultiSelectionCommand(this.handleRemoveHistoryItem.bind(this)),
+      "codeQLQueryHistory.renameItem": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleRenameItem.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.compareWith": this.handleCompareWith.bind(this),
+      "codeQLQueryHistory.comparePerformanceWith":
+        this.handleComparePerformanceWith.bind(this),
+      "codeQLQueryHistory.showEvalLog": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleShowEvalLog.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.showEvalLogSummary": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleShowEvalLogSummary.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.showEvalLogViewer": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleShowEvalLogViewer.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.showQueryLog": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleShowQueryLog.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.showQueryText": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleShowQueryText.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.openQueryDirectory": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleOpenQueryDirectory.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.cancel": createMultiSelectionCommand(
+        this.handleCancel.bind(this),
+      ),
+      "codeQLQueryHistory.exportResults": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleExportResults.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.viewCsvResults": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleViewCsvResults.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.viewCsvAlerts": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleViewCsvAlerts.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.viewSarifAlerts": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleViewSarifAlerts.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.viewDil": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleViewDil.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.itemClicked": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleItemClicked.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.openOnGithub": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleOpenOnGithub.bind(this),
+        "query",
+      ),
+      "codeQLQueryHistory.copyRepoList": createSingleSelectionCommand(
+        this.app.logger,
+        this.handleCopyRepoList.bind(this),
+        "query",
+      ),
+
+      "codeQL.exportSelectedVariantAnalysisResults":
+        this.exportSelectedVariantAnalysisResults.bind(this),
+    };
   }
 
   public completeQuery(info: LocalQueryInfo, results: QueryWithResults): void {
@@ -389,7 +368,7 @@ export class QueryHistoryManager extends DisposableObject {
         ONE_HOUR_IN_MS,
         TWO_HOURS_IN_MS,
         queryHistoryConfigListener.ttlInMillis,
-        this.queryStorageDir,
+        this.queryHistoryDirs,
         qhm,
         ctx,
       ),
@@ -400,6 +379,11 @@ export class QueryHistoryManager extends DisposableObject {
     const variantAnalysisAddedSubscription =
       this.variantAnalysisManager.onVariantAnalysisAdded(
         async (variantAnalysis) => {
+          if (variantAnalysis.queries !== undefined) {
+            // This is a variant analysis that contains multiple queries, which
+            // is not fully supported yet. So we ignore it from the query history.
+            return;
+          }
           this.addQuery({
             t: "variant-analysis",
             status: QueryStatus.InProgress,
@@ -440,7 +424,12 @@ export class QueryHistoryManager extends DisposableObject {
             });
             await this.refreshTreeView();
           } else {
-            void extLogger.log(
+            if (variantAnalysis.queries !== undefined) {
+              // This is a variant analysis that contains multiple queries, which
+              // is not fully supported yet. So we ignore it from the query history.
+              return;
+            }
+            void this.app.logger.log(
               "Variant analysis status update event received for unknown variant analysis",
             );
           }
@@ -471,10 +460,10 @@ export class QueryHistoryManager extends DisposableObject {
   }
 
   async readQueryHistory(): Promise<void> {
-    void extLogger.log(
+    void this.app.logger.log(
       `Reading cached query history from '${this.queryMetadataStorageLocation}'.`,
     );
-    const history = await deserializeQueryHistory(
+    const history = await readQueryHistoryFromFile(
       this.queryMetadataStorageLocation,
     );
     this.treeDataProvider.allHistory = history;
@@ -490,46 +479,32 @@ export class QueryHistoryManager extends DisposableObject {
   }
 
   async writeQueryHistory(): Promise<void> {
-    await serializeQueryHistory(
+    await writeQueryHistoryToFile(
       this.treeDataProvider.allHistory,
       this.queryMetadataStorageLocation,
     );
   }
 
-  async handleOpenQuery(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ): Promise<void> {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-    if (!this.assertSingleQuery(finalMultiSelect) || !finalSingleItem) {
-      return;
-    }
-
-    if (finalSingleItem.t === "variant-analysis") {
-      await commands.executeCommand(
-        "codeQL.openVariantAnalysisQueryFile",
-        finalSingleItem.variantAnalysis.id,
-      );
+  async handleOpenQuery(item: QueryHistoryInfo): Promise<void> {
+    if (item.t === "variant-analysis") {
+      await this.variantAnalysisManager.openQueryFile(item.variantAnalysis.id);
       return;
     }
 
     let queryPath: string;
-    switch (finalSingleItem.t) {
+    switch (item.t) {
       case "local":
-        queryPath = finalSingleItem.initialInfo.queryPath;
+        queryPath = item.initialInfo.queryPath;
         break;
       default:
-        assertNever(finalSingleItem);
+        assertNever(item);
     }
     const textDocument = await workspace.openTextDocument(Uri.file(queryPath));
     const editor = await window.showTextDocument(textDocument, ViewColumn.One);
 
-    if (finalSingleItem.t === "local") {
-      const queryText = finalSingleItem.initialInfo.queryText;
-      if (queryText !== undefined && finalSingleItem.initialInfo.isQuickQuery) {
+    if (item.t === "local") {
+      const queryText = item.initialInfo.queryText;
+      if (queryText !== undefined && item.initialInfo.isQuickQuery) {
         await editor.edit((edit) =>
           edit.replace(
             textDocument.validateRange(
@@ -555,28 +530,18 @@ export class QueryHistoryManager extends DisposableObject {
           !(await pathExists(item.completedQuery?.query.querySaveDir))
         ) {
           this.treeDataProvider.remove(item);
-          item.completedQuery?.dispose();
         }
       }),
     );
   }
 
-  async handleRemoveHistoryItem(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[] = [],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-    const toDelete = finalMultiSelect || [finalSingleItem];
+  async handleRemoveHistoryItem(items: QueryHistoryInfo[]) {
     await Promise.all(
-      toDelete.map(async (item) => {
+      items.map(async (item) => {
         if (item.t === "local") {
           // Removing in progress local queries is not supported. They must be cancelled first.
           if (item.status !== QueryStatus.InProgress) {
             this.treeDataProvider.remove(item);
-            item.completedQuery?.dispose();
 
             // User has explicitly asked for this query to be removed.
             // We need to delete it from disk as well.
@@ -609,11 +574,13 @@ export class QueryHistoryManager extends DisposableObject {
           item,
         )}. Are you sure?`,
       );
-      if (!response) return;
+      if (!response) {
+        return;
+      }
     }
 
     this.treeDataProvider.remove(item);
-    void extLogger.log(`Deleted ${this.labelProvider.getLabel(item)}.`);
+    void this.app.logger.log(`Deleted ${this.labelProvider.getLabel(item)}.`);
 
     if (item.status === QueryStatus.InProgress) {
       await this.showToastWithWorkflowRunLink(item);
@@ -632,7 +599,9 @@ export class QueryHistoryManager extends DisposableObject {
 
     void showInformationMessageWithAction(message, "Go to workflow run").then(
       async (shouldOpenWorkflowRun) => {
-        if (!shouldOpenWorkflowRun) return;
+        if (!shouldOpenWorkflowRun) {
+          return;
+        }
         await env.openExternal(Uri.parse(workflowRunUrl));
       },
     );
@@ -662,22 +631,10 @@ export class QueryHistoryManager extends DisposableObject {
     }
   }
 
-  async handleRenameItem(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ): Promise<void> {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    if (!this.assertSingleQuery(finalMultiSelect)) {
-      return;
-    }
-
+  async handleRenameItem(item: QueryHistoryInfo): Promise<void> {
     const response = await window.showInputBox({
       placeHolder: `(use default: ${this.queryHistoryConfigListener.format})`,
-      value: finalSingleItem.userSpecifiedLabel ?? "",
+      value: item.userSpecifiedLabel ?? "",
       title: "Set query label",
       prompt:
         "Set the query history item label. See the description of the codeQL.queryHistory.format setting for more information.",
@@ -685,153 +642,140 @@ export class QueryHistoryManager extends DisposableObject {
     // undefined response means the user cancelled the dialog; don't change anything
     if (response !== undefined) {
       // Interpret empty string response as 'go back to using default'
-      finalSingleItem.userSpecifiedLabel =
-        response === "" ? undefined : response;
+      item.userSpecifiedLabel = response === "" ? undefined : response;
       await this.refreshTreeView();
     }
   }
 
+  isSuccessfulCompletedLocalQueryInfo(
+    item: QueryHistoryInfo,
+  ): item is CompletedLocalQueryInfo {
+    return item.t === "local" && item.completedQuery?.successful === true;
+  }
+
   async handleCompareWith(
     singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
+    multiSelect: QueryHistoryInfo[] | undefined,
   ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
+    multiSelect ||= [singleItem];
 
-    try {
-      // local queries only
-      if (finalSingleItem?.t !== "local") {
-        throw new Error("Please select a local query.");
-      }
-
-      if (!finalSingleItem.completedQuery?.successful) {
-        throw new Error(
-          "Please select a query that has completed successfully.",
-        );
-      }
-
-      const from = this.compareWithItem || singleItem;
-      const to = await this.findOtherQueryToCompare(from, finalMultiSelect);
-
-      if (from.completed && to?.completed) {
-        await this.doCompareCallback(
-          from as CompletedLocalQueryInfo,
-          to as CompletedLocalQueryInfo,
-        );
-      }
-    } catch (e) {
-      void showAndLogExceptionWithTelemetry(
-        redactableError(
-          asError(e),
-        )`Failed to compare queries: ${getErrorMessage(e)}`,
+    if (
+      !this.isSuccessfulCompletedLocalQueryInfo(singleItem) ||
+      !multiSelect.every(this.isSuccessfulCompletedLocalQueryInfo)
+    ) {
+      throw new Error(
+        "Please only select local queries that have completed successfully.",
       );
+    }
+
+    const fromItem = this.getFromQueryToCompare(singleItem, multiSelect);
+
+    let toItem: CompletedLocalQueryInfo | undefined = undefined;
+    try {
+      toItem = await this.findOtherQueryToCompare(fromItem, multiSelect);
+    } catch (e) {
+      void showAndLogErrorMessage(
+        this.app.logger,
+        `Failed to compare queries: ${getErrorMessage(e)}`,
+      );
+    }
+
+    if (toItem !== undefined) {
+      await this.doCompareCallback(fromItem, toItem);
     }
   }
 
-  async handleItemClicked(
+  async handleComparePerformanceWith(
     singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[] = [],
+    multiSelect: QueryHistoryInfo[] | undefined,
   ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-    if (!this.assertSingleQuery(finalMultiSelect) || !finalSingleItem) {
-      return;
+    multiSelect ||= [singleItem];
+
+    if (
+      !this.isSuccessfulCompletedLocalQueryInfo(singleItem) ||
+      !multiSelect.every(this.isSuccessfulCompletedLocalQueryInfo)
+    ) {
+      throw new Error(
+        "Please only select local queries that have completed successfully.",
+      );
     }
 
-    this.treeDataProvider.setCurrentItem(finalSingleItem);
+    const fromItem = this.getFromQueryToCompare(singleItem, multiSelect);
+
+    let toItem: CompletedLocalQueryInfo | undefined = undefined;
+    try {
+      toItem = await this.findOtherQueryToComparePerformance(
+        fromItem,
+        multiSelect,
+      );
+    } catch (e) {
+      void showAndLogErrorMessage(
+        this.app.logger,
+        `Failed to compare queries: ${getErrorMessage(e)}`,
+      );
+    }
+
+    await this.doComparePerformanceCallback(fromItem, toItem);
+  }
+
+  async handleItemClicked(item: QueryHistoryInfo) {
+    this.treeDataProvider.setCurrentItem(item);
 
     const now = new Date();
     const prevItemClick = this.lastItemClick;
-    this.lastItemClick = { time: now, item: finalSingleItem };
+    this.lastItemClick = { time: now, item };
 
     if (
       prevItemClick !== undefined &&
       now.valueOf() - prevItemClick.time.valueOf() < DOUBLE_CLICK_TIME &&
-      finalSingleItem === prevItemClick.item
+      item === prevItemClick.item
     ) {
       // show original query file on double click
-      await this.handleOpenQuery(finalSingleItem, [finalSingleItem]);
+      await this.handleOpenQuery(item);
     } else if (
-      finalSingleItem.t === "variant-analysis" ||
-      finalSingleItem.status === QueryStatus.Completed
+      item.t === "variant-analysis" ||
+      item.status === QueryStatus.Completed
     ) {
       // show results on single click (if results view is available)
-      await this.openQueryResults(finalSingleItem);
+      await this.openQueryResults(item);
     }
   }
 
-  async handleShowQueryLog(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
+  async handleShowQueryLog(item: QueryHistoryInfo) {
     // Local queries only
-    if (!this.assertSingleQuery(multiSelect) || singleItem?.t !== "local") {
+    if (item?.t !== "local" || !item.completedQuery) {
       return;
     }
 
-    if (!singleItem.completedQuery) {
-      return;
-    }
-
-    if (singleItem.completedQuery.logFileLocation) {
-      await this.tryOpenExternalFile(singleItem.completedQuery.logFileLocation);
-    } else {
-      void showAndLogWarningMessage("No log file available");
-    }
-  }
-
-  async getQueryHistoryItemDirectory(
-    queryHistoryItem: QueryHistoryInfo,
-  ): Promise<string> {
-    if (queryHistoryItem.t === "local") {
-      if (queryHistoryItem.completedQuery) {
-        return queryHistoryItem.completedQuery.query.querySaveDir;
-      }
-    } else if (queryHistoryItem.t === "variant-analysis") {
-      return this.variantAnalysisManager.getVariantAnalysisStorageLocation(
-        queryHistoryItem.variantAnalysis.id,
+    if (item.completedQuery.logFileLocation) {
+      await tryOpenExternalFile(
+        this.app.commands,
+        item.completedQuery.logFileLocation,
       );
     } else {
-      assertNever(queryHistoryItem);
+      void showAndLogWarningMessage(this.app.logger, "No log file available");
     }
-
-    throw new Error("Unable to get query directory");
   }
 
-  async handleOpenQueryDirectory(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    if (!this.assertSingleQuery(finalMultiSelect) || !finalSingleItem) {
-      return;
-    }
-
+  async handleOpenQueryDirectory(item: QueryHistoryInfo) {
     let externalFilePath: string | undefined;
-    if (finalSingleItem.t === "local") {
-      if (finalSingleItem.completedQuery) {
-        externalFilePath = join(
-          finalSingleItem.completedQuery.query.querySaveDir,
-          "timestamp",
-        );
+    if (item.t === "local") {
+      const querySaveDir =
+        item.initialInfo.outputDir?.querySaveDir ??
+        item.completedQuery?.query.querySaveDir;
+
+      if (querySaveDir) {
+        externalFilePath = join(querySaveDir, "timestamp");
       }
-    } else if (finalSingleItem.t === "variant-analysis") {
+    } else if (item.t === "variant-analysis") {
       externalFilePath = join(
         this.variantAnalysisManager.getVariantAnalysisStorageLocation(
-          finalSingleItem.variantAnalysis.id,
+          item.variantAnalysis.id,
         ),
         "timestamp",
       );
     } else {
-      assertNever(finalSingleItem);
+      assertNever(item);
     }
 
     if (externalFilePath) {
@@ -846,7 +790,7 @@ export class QueryHistoryManager extends DisposableObject {
         }
       }
       try {
-        await commands.executeCommand(
+        await this.app.commands.execute(
           "revealFileInOS",
           Uri.file(externalFilePath),
         );
@@ -855,145 +799,108 @@ export class QueryHistoryManager extends DisposableObject {
           `Failed to open ${externalFilePath}: ${getErrorMessage(e)}`,
         );
       }
+    } else {
+      this.warnNoQueryDir();
     }
+  }
+
+  private warnNoQueryDir() {
+    void showAndLogWarningMessage(
+      this.app.logger,
+      `Results directory is not available for this run.`,
+    );
   }
 
   private warnNoEvalLogs() {
     void showAndLogWarningMessage(
-      `Evaluator log, summary, and viewer are not available for this run. Perhaps it failed before evaluation, or you are running with a version of CodeQL before ' + ${CliVersionConstraint.CLI_VERSION_WITH_PER_QUERY_EVAL_LOG}?`,
+      this.app.logger,
+      `Evaluator log, summary, and viewer are not available for this run. Perhaps it failed before evaluation?`,
     );
   }
 
-  private warnInProgressEvalLogSummary() {
-    void showAndLogWarningMessage(
-      'The evaluator log summary is still being generated for this run. Please try again later. The summary generation process is tracked in the "CodeQL Extension Log" view.',
-    );
-  }
-
-  private warnInProgressEvalLogViewer() {
-    void showAndLogWarningMessage(
-      "The viewer's data is still being generated for this run. Please try again or re-run the query.",
-    );
-  }
-
-  async handleShowEvalLog(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Only applicable to an individual local query
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local"
-    ) {
-      return;
-    }
-
-    if (finalSingleItem.evalLogLocation) {
-      await this.tryOpenExternalFile(finalSingleItem.evalLogLocation);
-    } else {
-      this.warnNoEvalLogs();
-    }
-  }
-
-  async handleShowEvalLogSummary(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Only applicable to an individual local query
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local"
-    ) {
-      return;
-    }
-
-    if (finalSingleItem.evalLogSummaryLocation) {
-      await this.tryOpenExternalFile(finalSingleItem.evalLogSummaryLocation);
-      return;
-    }
+  private async warnNoEvalLogSummary(item: LocalQueryInfo) {
+    const evalLogLocation =
+      item.evaluatorLogPaths?.log ?? item.initialInfo.outputDir?.evalLogPath;
 
     // Summary log file doesn't exist.
-    if (
-      finalSingleItem.evalLogLocation &&
-      (await pathExists(finalSingleItem.evalLogLocation))
-    ) {
+    if (evalLogLocation && (await pathExists(evalLogLocation))) {
       // If raw log does exist, then the summary log is still being generated.
-      this.warnInProgressEvalLogSummary();
+      void showAndLogWarningMessage(
+        this.app.logger,
+        'The evaluator log summary is still being generated for this run. Please try again later. The summary generation process is tracked in the "CodeQL Extension Log" view.',
+      );
     } else {
       this.warnNoEvalLogs();
     }
   }
 
-  async handleShowEvalLogViewer(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
+  async handleShowEvalLog(item: QueryHistoryInfo) {
+    if (item.t !== "local") {
+      return;
+    }
+
+    const evalLogLocation =
+      item.evaluatorLogPaths?.log ?? item.initialInfo.outputDir?.evalLogPath;
+
+    if (evalLogLocation && (await pathExists(evalLogLocation))) {
+      await tryOpenExternalFile(this.app.commands, evalLogLocation);
+    } else {
+      this.warnNoEvalLogs();
+    }
+  }
+
+  async handleShowEvalLogSummary(item: QueryHistoryInfo) {
+    if (item.t !== "local") {
+      return;
+    }
+
+    // If the summary file location wasn't saved, display error
+    if (!item.evaluatorLogPaths?.humanReadableSummary) {
+      await this.warnNoEvalLogSummary(item);
+      return;
+    }
+
+    await tryOpenExternalFile(
+      this.app.commands,
+      item.evaluatorLogPaths.humanReadableSummary,
     );
-    // Only applicable to an individual local query
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local"
-    ) {
+  }
+
+  async handleShowEvalLogViewer(item: QueryHistoryInfo) {
+    if (item.t !== "local") {
       return;
     }
 
     // If the JSON summary file location wasn't saved, display error
-    if (finalSingleItem.jsonEvalLogSummaryLocation === undefined) {
-      this.warnInProgressEvalLogViewer();
+    if (item.evaluatorLogPaths?.jsonSummary === undefined) {
+      await this.warnNoEvalLogSummary(item);
       return;
     }
 
     // TODO(angelapwen): Stream the file in.
     try {
       const evalLogData: EvalLogData[] = await parseViewerData(
-        finalSingleItem.jsonEvalLogSummaryLocation,
+        item.evaluatorLogPaths.jsonSummary,
       );
       const evalLogTreeBuilder = new EvalLogTreeBuilder(
-        finalSingleItem.getQueryName(),
+        item.getQueryName(),
         evalLogData,
       );
       this.evalLogViewer.updateRoots(await evalLogTreeBuilder.getRoots());
-    } catch (e) {
+    } catch {
       throw new Error(
-        `Could not read evaluator log summary JSON file to generate viewer data at ${finalSingleItem.jsonEvalLogSummaryLocation}.`,
+        `Could not read evaluator log summary JSON file to generate viewer data at ${item.evaluatorLogPaths.jsonSummary}.`,
       );
     }
   }
 
-  async handleCancel(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    const selected = finalMultiSelect || [finalSingleItem];
-
-    const results = selected.map(async (item) => {
+  async handleCancel(items: QueryHistoryInfo[]) {
+    const results = items.map(async (item) => {
       if (item.status === QueryStatus.InProgress) {
         if (item.t === "local") {
           item.cancel();
         } else if (item.t === "variant-analysis") {
-          await commands.executeCommand(
-            "codeQL.cancelVariantAnalysis",
+          await this.variantAnalysisManager.cancelVariantAnalysis(
             item.variantAnalysis.id,
           );
         } else {
@@ -1005,226 +912,130 @@ export class QueryHistoryManager extends DisposableObject {
     await Promise.all(results);
   }
 
-  async handleShowQueryText(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[] = [],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    if (!this.assertSingleQuery(finalMultiSelect) || !finalSingleItem) {
-      return;
-    }
-
-    if (finalSingleItem.t === "variant-analysis") {
-      await commands.executeCommand(
-        "codeQL.openVariantAnalysisQueryText",
-        finalSingleItem.variantAnalysis.id,
-      );
+  async handleShowQueryText(item: QueryHistoryInfo) {
+    if (item.t === "variant-analysis") {
+      await this.variantAnalysisManager.openQueryText(item.variantAnalysis.id);
       return;
     }
 
     const params = new URLSearchParams({
       isQuickEval: String(
-        !!(
-          finalSingleItem.t === "local" &&
-          finalSingleItem.initialInfo.quickEvalPosition
-        ),
+        !!(item.t === "local" && item.initialInfo.quickEvalPosition),
       ),
-      queryText: encodeURIComponent(getQueryText(finalSingleItem)),
+      queryText: encodeURIComponent(getQueryText(item)),
     });
 
-    const queryId = getQueryId(finalSingleItem);
+    const queryId = getQueryId(item);
 
     const uri = Uri.parse(`codeql:${queryId}.ql?${params.toString()}`, true);
     const doc = await workspace.openTextDocument(uri);
     await window.showTextDocument(doc, { preview: false });
   }
 
-  async handleViewSarifAlerts(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Local queries only
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local" ||
-      !finalSingleItem.completedQuery
-    ) {
+  async handleViewSarifAlerts(item: QueryHistoryInfo) {
+    if (item.t !== "local" || !item.completedQuery) {
       return;
     }
 
-    const query = finalSingleItem.completedQuery.query;
+    const query = item.completedQuery.query;
     const hasInterpretedResults = query.canHaveInterpretedResults();
     if (hasInterpretedResults) {
-      await this.tryOpenExternalFile(query.resultsPaths.interpretedResultsPath);
+      await tryOpenExternalFile(
+        this.app.commands,
+        query.resultsPaths.interpretedResultsPath,
+      );
     } else {
-      const label = this.labelProvider.getLabel(finalSingleItem);
+      const label = this.labelProvider.getLabel(item);
       void showAndLogInformationMessage(
+        this.app.logger,
         `Query ${label} has no interpreted results.`,
       );
     }
   }
 
-  async handleViewCsvResults(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Local queries only
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local" ||
-      !finalSingleItem.completedQuery
-    ) {
+  async handleViewCsvResults(item: QueryHistoryInfo) {
+    if (item.t !== "local" || !item.completedQuery) {
       return;
     }
-    const query = finalSingleItem.completedQuery.query;
+    const query = item.completedQuery.query;
     if (await query.hasCsv()) {
-      void this.tryOpenExternalFile(query.csvPath);
+      void tryOpenExternalFile(this.app.commands, query.csvPath);
       return;
     }
     if (await query.exportCsvResults(this.qs.cliServer, query.csvPath)) {
-      void this.tryOpenExternalFile(query.csvPath);
+      void tryOpenExternalFile(this.app.commands, query.csvPath);
     }
   }
 
-  async handleViewCsvAlerts(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Local queries only
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local" ||
-      !finalSingleItem.completedQuery
-    ) {
+  async handleViewCsvAlerts(item: QueryHistoryInfo) {
+    if (item.t !== "local" || !item.completedQuery) {
       return;
     }
 
-    await this.tryOpenExternalFile(
-      await finalSingleItem.completedQuery.query.ensureCsvAlerts(
+    await tryOpenExternalFile(
+      this.app.commands,
+      await item.completedQuery.query.ensureCsvAlerts(
         this.qs.cliServer,
         this.dbm,
       ),
     );
   }
 
-  async handleViewDil(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Local queries only
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "local" ||
-      !finalSingleItem.completedQuery
-    ) {
+  async handleViewDil(item: QueryHistoryInfo) {
+    if (item.t !== "local" || !item.completedQuery) {
       return;
     }
 
-    await this.tryOpenExternalFile(
-      await finalSingleItem.completedQuery.query.ensureDilPath(
-        this.qs.cliServer,
-      ),
+    await tryOpenExternalFile(
+      this.app.commands,
+      await item.completedQuery.query.ensureDilPath(this.qs.cliServer),
     );
   }
 
-  async handleOpenOnGithub(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    if (!this.assertSingleQuery(finalMultiSelect) || !finalSingleItem) {
+  async handleOpenOnGithub(item: QueryHistoryInfo) {
+    if (item.t !== "variant-analysis") {
       return;
     }
 
-    if (finalSingleItem.t === "local") {
-      return;
-    }
+    const actionsWorkflowRunUrl = getActionsWorkflowRunUrl(item);
 
-    const actionsWorkflowRunUrl = getActionsWorkflowRunUrl(finalSingleItem);
-
-    await commands.executeCommand(
+    await this.app.commands.execute(
       "vscode.open",
       Uri.parse(actionsWorkflowRunUrl),
     );
   }
 
-  async handleCopyRepoList(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ) {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Variant analyses only
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "variant-analysis"
-    ) {
+  async handleCopyRepoList(item: QueryHistoryInfo) {
+    if (item.t !== "variant-analysis") {
       return;
     }
 
-    await commands.executeCommand(
-      "codeQL.copyVariantAnalysisRepoList",
-      finalSingleItem.variantAnalysis.id,
+    await this.variantAnalysisManager.copyRepoListToClipboard(
+      item.variantAnalysis.id,
     );
   }
 
-  async handleExportResults(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ): Promise<void> {
-    const { finalSingleItem, finalMultiSelect } = this.determineSelection(
-      singleItem,
-      multiSelect,
-    );
-
-    // Variant analysis only
-    if (
-      !this.assertSingleQuery(finalMultiSelect) ||
-      !finalSingleItem ||
-      finalSingleItem.t !== "variant-analysis"
-    ) {
+  async handleExportResults(item: QueryHistoryInfo): Promise<void> {
+    if (item.t !== "variant-analysis") {
       return;
     }
 
-    await commands.executeCommand(
-      "codeQL.exportVariantAnalysisResults",
-      finalSingleItem.variantAnalysis.id,
+    await this.variantAnalysisManager.exportResults(item.variantAnalysis.id);
+  }
+
+  /**
+   * Exports the results of the currently-selected variant analysis.
+   */
+  async exportSelectedVariantAnalysisResults(): Promise<void> {
+    const queryHistoryItem = this.getCurrentQueryHistoryItem();
+    if (!queryHistoryItem || queryHistoryItem.t !== "variant-analysis") {
+      throw new Error(
+        "No variant analysis results currently open. To open results, click an item in the query history view.",
+      );
+    }
+
+    await this.variantAnalysisManager.exportResults(
+      queryHistoryItem.variantAnalysis.id,
     );
   }
 
@@ -1253,100 +1064,58 @@ export class QueryHistoryManager extends DisposableObject {
     }
   }
 
-  private async tryOpenExternalFile(fileLocation: string) {
-    const uri = Uri.file(fileLocation);
-    try {
-      await window.showTextDocument(uri, { preview: false });
-    } catch (e) {
-      const msg = getErrorMessage(e);
-      if (
-        msg.includes(
-          "Files above 50MB cannot be synchronized with extensions",
-        ) ||
-        msg.includes("too large to open")
-      ) {
-        const res = await showBinaryChoiceDialog(
-          `VS Code does not allow extensions to open files >50MB. This file
-exceeds that limit. Do you want to open it outside of VS Code?
-
-You can also try manually opening it inside VS Code by selecting
-the file in the file explorer and dragging it into the workspace.`,
-        );
-        if (res) {
-          try {
-            await commands.executeCommand("revealFileInOS", uri);
-          } catch (e) {
-            void showAndLogExceptionWithTelemetry(
-              redactableError(
-                asError(e),
-              )`Failed to reveal file in OS: ${getErrorMessage(e)}`,
-            );
-          }
-        }
-      } else {
-        void showAndLogExceptionWithTelemetry(
-          redactableError(asError(e))`Could not open file ${fileLocation}`,
-          {
-            fullMessage: `${getErrorMessage(e)}\n${getErrorStack(e)}`,
-          },
-        );
-      }
+  private getFromQueryToCompare(
+    singleItem: CompletedLocalQueryInfo,
+    multiSelect: CompletedLocalQueryInfo[],
+  ): CompletedLocalQueryInfo {
+    if (
+      this.compareWithItem &&
+      this.isSuccessfulCompletedLocalQueryInfo(this.compareWithItem) &&
+      multiSelect.includes(this.compareWithItem)
+    ) {
+      return this.compareWithItem;
+    } else {
+      return singleItem;
     }
   }
 
   private async findOtherQueryToCompare(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
+    fromItem: CompletedLocalQueryInfo,
+    allSelectedItems: CompletedLocalQueryInfo[],
   ): Promise<CompletedLocalQueryInfo | undefined> {
-    // Variant analyses cannot be compared
-    if (
-      singleItem.t !== "local" ||
-      multiSelect.some((s) => s.t !== "local") ||
-      !singleItem.completedQuery
-    ) {
-      return undefined;
-    }
-    const dbName = singleItem.initialInfo.databaseInfo.name;
+    const dbName = fromItem.databaseName;
 
-    // if exactly 2 queries are selected, use those
-    if (multiSelect?.length === 2) {
-      // return the query that is not the first selected one
-      const otherQuery = (
-        singleItem === multiSelect[0] ? multiSelect[1] : multiSelect[0]
-      ) as LocalQueryInfo;
-      if (!otherQuery.completedQuery) {
-        throw new Error("Please select a completed query.");
-      }
-      if (!otherQuery.completedQuery.successful) {
-        throw new Error("Please select a successful query.");
-      }
-      if (otherQuery.initialInfo.databaseInfo.name !== dbName) {
+    // If exactly 2 items are selected, return the one that
+    // isn't being used as the "from" item.
+    if (allSelectedItems.length === 2) {
+      const otherItem =
+        fromItem === allSelectedItems[0]
+          ? allSelectedItems[1]
+          : allSelectedItems[0];
+      if (otherItem.databaseName !== dbName) {
         throw new Error("Query databases must be the same.");
       }
-      return otherQuery as CompletedLocalQueryInfo;
+      return otherItem;
     }
 
-    if (multiSelect?.length > 2) {
+    if (allSelectedItems.length > 2) {
       throw new Error("Please select no more than 2 queries.");
     }
 
-    // otherwise, let the user choose
+    // Otherwise, present a dialog so the user can choose the item they want to use.
     const comparableQueryLabels = this.treeDataProvider.allHistory
+      .filter(this.isSuccessfulCompletedLocalQueryInfo)
       .filter(
-        (otherQuery) =>
-          otherQuery !== singleItem &&
-          otherQuery.t === "local" &&
-          otherQuery.completedQuery &&
-          otherQuery.completedQuery.successful &&
-          otherQuery.initialInfo.databaseInfo.name === dbName,
+        (otherItem) =>
+          otherItem !== fromItem && otherItem.databaseName === dbName,
       )
       .map((item) => ({
         label: this.labelProvider.getLabel(item),
-        description: (item as CompletedLocalQueryInfo).initialInfo.databaseInfo
-          .name,
-        detail: (item as CompletedLocalQueryInfo).completedQuery.statusString,
-        query: item as CompletedLocalQueryInfo,
+        description: item.databaseName,
+        detail: item.completedQuery.message,
+        query: item,
       }));
+
     if (comparableQueryLabels.length < 1) {
       throw new Error("No other queries available to compare with.");
     }
@@ -1355,15 +1124,50 @@ the file in the file explorer and dragging it into the workspace.`,
     return choice?.query;
   }
 
-  private assertSingleQuery(
-    multiSelect: QueryHistoryInfo[] = [],
-    message = "Please select a single query.",
-  ) {
-    if (multiSelect.length > 1) {
-      void showAndLogErrorMessage(message);
-      return false;
+  private async findOtherQueryToComparePerformance(
+    fromItem: CompletedLocalQueryInfo,
+    allSelectedItems: CompletedLocalQueryInfo[],
+  ): Promise<CompletedLocalQueryInfo | undefined> {
+    // If exactly 2 items are selected, return the one that
+    // isn't being used as the "from" item.
+    if (allSelectedItems.length === 2) {
+      const otherItem =
+        fromItem === allSelectedItems[0]
+          ? allSelectedItems[1]
+          : allSelectedItems[0];
+      return otherItem;
     }
-    return true;
+
+    if (allSelectedItems.length > 2) {
+      throw new Error("Please select no more than 2 queries.");
+    }
+
+    // Otherwise, present a dialog so the user can choose the item they want to use.
+    const comparableQueryLabels = this.treeDataProvider.allHistory
+      .filter(this.isSuccessfulCompletedLocalQueryInfo)
+      .filter((otherItem) => otherItem !== fromItem)
+      .map((item) => ({
+        label: this.labelProvider.getLabel(item),
+        description: item.databaseName,
+        detail: item.completedQuery.message,
+        query: item,
+      }));
+    const comparableQueryLabelsWithDefault = [
+      {
+        label: "Single run",
+        description:
+          "Look at the performance of this run, compared to a trivial baseline",
+        detail: undefined,
+        query: undefined,
+      },
+      ...comparableQueryLabels,
+    ];
+    if (comparableQueryLabelsWithDefault.length < 1) {
+      throw new Error("No other queries available to compare with.");
+    }
+    const choice = await window.showQuickPick(comparableQueryLabelsWithDefault);
+
+    return choice?.query;
   }
 
   /**
@@ -1393,52 +1197,6 @@ the file in the file explorer and dragging it into the workspace.`,
     ) {
       this.compareWithItem = undefined;
     }
-  }
-
-  /**
-   * If no items are selected, attempt to grab the selection from the treeview.
-   * However, often the treeview itself does not have any selection. In this case,
-   * grab the selection from the `treeDataProvider` current item.
-   *
-   * We need to use this method because when clicking on commands from the view title
-   * bar, the selections are not passed in.
-   *
-   * @param singleItem the single item selected, or undefined if no item is selected
-   * @param multiSelect a multi-select or undefined if no items are selected
-   */
-  private determineSelection(
-    singleItem: QueryHistoryInfo,
-    multiSelect: QueryHistoryInfo[],
-  ): {
-    finalSingleItem: QueryHistoryInfo;
-    finalMultiSelect: QueryHistoryInfo[];
-  } {
-    if (!singleItem && !multiSelect?.[0]) {
-      const selection = this.treeView.selection;
-      const current = this.treeDataProvider.getCurrent();
-      if (selection?.length) {
-        return {
-          finalSingleItem: selection[0],
-          finalMultiSelect: [...selection],
-        };
-      } else if (current) {
-        return {
-          finalSingleItem: current,
-          finalMultiSelect: [current],
-        };
-      }
-    }
-
-    // ensure we only return undefined if we have neither a single or multi-selecion
-    if (singleItem && !multiSelect?.[0]) {
-      multiSelect = [singleItem];
-    } else if (!singleItem && multiSelect?.[0]) {
-      singleItem = multiSelect[0];
-    }
-    return {
-      finalSingleItem: singleItem,
-      finalMultiSelect: multiSelect,
-    };
   }
 
   async refreshTreeView(): Promise<void> {

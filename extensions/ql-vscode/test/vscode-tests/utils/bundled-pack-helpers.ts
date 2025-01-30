@@ -1,5 +1,6 @@
 import { Readable } from "stream";
-import { extract as tar_extract, Headers } from "tar-stream";
+import type { Headers } from "tar-stream";
+import { extract as tar_extract } from "tar-stream";
 import { pipeline } from "stream/promises";
 import { createGunzip } from "zlib";
 
@@ -7,6 +8,7 @@ export interface QueryPackFS {
   fileExists: (name: string) => boolean;
   fileContents: (name: string) => Buffer;
   directoryContents: (name: string) => string[];
+  allFiles: () => string[];
 }
 
 export async function readBundledPack(
@@ -80,6 +82,9 @@ export async function readBundledPack(
             dir.substring(name.length + 1).split("/").length === 1,
         )
         .map((dir) => dir.substring(name.length + 1));
+    },
+    allFiles: (): string[] => {
+      return Object.keys(files);
     },
   };
 }

@@ -1,5 +1,5 @@
-import { UserCancellationException } from "../commandRunner";
-import { DbManager } from "../databases/db-manager";
+import { UserCancellationException } from "../common/vscode/progress";
+import type { DbManager } from "../databases/db-manager";
 import { DbItemKind } from "../databases/db-item";
 
 export interface RepositorySelection {
@@ -13,15 +13,11 @@ export interface RepositorySelection {
  * @returns The user selection.
  */
 export async function getRepositorySelection(
-  dbManager?: DbManager,
+  dbManager: DbManager,
 ): Promise<RepositorySelection> {
-  const selectedDbItem = dbManager?.getSelectedDbItem();
+  const selectedDbItem = dbManager.getSelectedDbItem();
   if (selectedDbItem) {
     switch (selectedDbItem.kind) {
-      case DbItemKind.LocalDatabase || DbItemKind.LocalList:
-        throw new UserCancellationException(
-          "Local databases and lists are not supported yet.",
-        );
       case DbItemKind.RemoteSystemDefinedList:
         return { repositoryLists: [selectedDbItem.listName] };
       case DbItemKind.RemoteUserDefinedList:

@@ -1,10 +1,10 @@
-import * as React from "react";
 import { useState } from "react";
 
-import { ComponentMeta } from "@storybook/react";
+import type { Meta } from "@storybook/react";
 
 import { RepositoriesSearchSortRow as RepositoriesSearchSortRowComponent } from "../../view/variant-analysis/RepositoriesSearchSortRow";
-import { defaultFilterSortState } from "../../pure/variant-analysis-filter-sort";
+import { defaultFilterSortState } from "../../variant-analysis/shared/variant-analysis-filter-sort";
+import { ResultFormat } from "../../variant-analysis/shared/variant-analysis-result-format";
 
 export default {
   title: "Variant Analysis/Repositories Search and Sort Row",
@@ -16,12 +16,26 @@ export default {
       },
     },
   },
-} as ComponentMeta<typeof RepositoriesSearchSortRowComponent>;
+} as Meta<typeof RepositoriesSearchSortRowComponent>;
 
 export const RepositoriesSearchSortRow = () => {
-  const [value, setValue] = useState(defaultFilterSortState);
+  const [filterSortValue, setFilterSortValue] = useState(
+    defaultFilterSortState,
+  );
+
+  const [resultFormatValue, setResultFormatValue] = useState(
+    ResultFormat.Alerts,
+  );
+
+  const variantAnalysisQueryKind = "problem";
 
   return (
-    <RepositoriesSearchSortRowComponent value={value} onChange={setValue} />
+    <RepositoriesSearchSortRowComponent
+      filterSortValue={filterSortValue}
+      resultFormatValue={resultFormatValue}
+      onFilterSortChange={setFilterSortValue}
+      onResultFormatChange={setResultFormatValue}
+      variantAnalysisQueryKind={variantAnalysisQueryKind}
+    />
   );
 };

@@ -1,10 +1,10 @@
-import { Memento } from "../src/common/memento";
+import type { Memento } from "../src/common/memento";
 
 export function createMockMemento(): Memento {
   return new MockMemento();
 }
 
-export class MockMemento<T> implements Memento {
+class MockMemento<T> implements Memento {
   private readonly map: Map<string, T>;
 
   constructor() {

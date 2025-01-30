@@ -1,10 +1,10 @@
-import { retry } from "@octokit/plugin-retry";
-import * as Octokit from "@octokit/rest";
-import { RequestInterface } from "@octokit/types/dist-types/RequestInterface";
+import type { Octokit } from "@octokit/rest";
+import type { RequestInterface } from "@octokit/types/dist-types/RequestInterface";
 
-import { Credentials } from "../../src/common/authentication";
+import type { Credentials } from "../../src/common/authentication";
+import { AppOctokit } from "../../src/common/octokit";
 
-function makeTestOctokit(octokit: Octokit.Octokit): Credentials {
+function makeTestOctokit(octokit: Octokit): Credentials {
   return {
     getOctokit: async () => octokit,
     getAccessToken: async () => {
@@ -15,6 +15,7 @@ function makeTestOctokit(octokit: Octokit.Octokit): Credentials {
         "getExistingAccessToken not supported by test credentials",
       );
     },
+    authProviderId: "github",
   };
 }
 
@@ -38,5 +39,5 @@ export function testCredentialsWithStub(
  * optionally authenticated with a given token.
  */
 export function testCredentialsWithRealOctokit(token?: string): Credentials {
-  return makeTestOctokit(new Octokit.Octokit({ auth: token, retry }));
+  return makeTestOctokit(new AppOctokit({ auth: token }));
 }

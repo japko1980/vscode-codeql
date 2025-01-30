@@ -7,29 +7,23 @@ import {
   mkdirpSync,
 } from "fs-extra";
 import { platform } from "os";
+import type { InitialQueryInfo } from "../../../src/query-results";
 import {
   LocalQueryInfo,
-  InitialQueryInfo,
   interpretResultsSarif,
 } from "../../../src/query-results";
-import { QueryWithResults } from "../../../src/run-queries-shared";
-import {
+import type { QueryWithResults } from "../../../src/run-queries-shared";
+import { QueryEvaluationInfo } from "../../../src/run-queries-shared";
+import { QueryOutputDir } from "../../../src/local-queries/query-output-dir";
+import { SortDirection } from "../../../src/common/interface-types";
+import type {
   DatabaseInfo,
-  SortDirection,
   SortedResultSetInfo,
-} from "../../../src/pure/interface-types";
-import { CodeQLCliServer, SourceInfo } from "../../../src/cli";
+} from "../../../src/common/interface-types";
+import type { CodeQLCliServer, SourceInfo } from "../../../src/codeql-cli/cli";
 import { CancellationTokenSource, Uri } from "vscode";
-import { tmpDir } from "../../../src/helpers";
-import {
-  formatLegacyMessage,
-  QueryInProgress,
-} from "../../../src/legacy-query-server/run-queries";
-import {
-  EvaluationResult,
-  QueryResultType,
-} from "../../../src/pure/legacy-messages";
-import { sleep } from "../../../src/pure/time";
+import { tmpDir } from "../../../src/tmp-dir";
+import { sleep } from "../../../src/common/time";
 import { mockedObject } from "../utils/mocking.helpers";
 
 describe("query-results", () => {
@@ -58,6 +52,7 @@ describe("query-results", () => {
         endLine: 2,
         fileName: "/home/users/yz",
       };
+      (fqi.initialInfo as any).isQuickEval = true;
       expect(fqi.getQueryName()).toBe("Quick evaluation of yz:1-2");
       (fqi.initialInfo as any).quickEvalPosition.endLine = 1;
       expect(fqi.getQueryName()).toBe("Quick evaluation of yz:1");
@@ -104,33 +99,6 @@ describe("query-results", () => {
       expect(completedQuery.getResultsPath("zxa")).toBe("bxa");
     });
 
-    it("should format the statusString", () => {
-      const evalResult: EvaluationResult = {
-        resultType: QueryResultType.OTHER_ERROR,
-        evaluationTime: 12340,
-        queryId: 3,
-        runId: 1,
-      };
-
-      evalResult.message = "Tremendously";
-      expect(formatLegacyMessage(evalResult)).toBe("failed: Tremendously");
-
-      evalResult.resultType = QueryResultType.OTHER_ERROR;
-      expect(formatLegacyMessage(evalResult)).toBe("failed: Tremendously");
-
-      evalResult.resultType = QueryResultType.CANCELLATION;
-      evalResult.evaluationTime = 2345;
-      expect(formatLegacyMessage(evalResult)).toBe("cancelled after 2 seconds");
-
-      evalResult.resultType = QueryResultType.OOM;
-      expect(formatLegacyMessage(evalResult)).toBe("out of memory");
-
-      evalResult.resultType = QueryResultType.SUCCESS;
-      expect(formatLegacyMessage(evalResult)).toBe("finished in 2 seconds");
-
-      evalResult.resultType = QueryResultType.TIMEOUT;
-      expect(formatLegacyMessage(evalResult)).toBe("timed out after 2 seconds");
-    });
     it("should updateSortState", async () => {
       // setup
       const fqi = createMockFullQueryInfo(
@@ -159,9 +127,9 @@ describe("query-results", () => {
       const expectedResultsPath = join(queryPath, "results.bqrs");
       const expectedSortedResultsPath = join(
         queryPath,
-        "sortedResults-a-result-set-name.bqrs",
+        "sortedResults-cc8589f226adc134f87f2438e10075e0667571c72342068e2281e0b3b65e1092.bqrs",
       );
-      expect(spy).toBeCalledWith(
+      expect(spy).toHaveBeenCalledWith(
         expectedResultsPath,
         expectedSortedResultsPath,
         "a-result-set-name",
@@ -220,11 +188,12 @@ describe("query-results", () => {
         );
 
         expect(results).toEqual({ a: "1234", t: "SarifInterpretationData" });
-        expect(spy).toBeCalledWith(
+        expect(spy).toHaveBeenCalledWith(
           metadata,
           resultsPath,
           interpretedResultsPath,
           sourceInfo,
+          undefined,
         );
       },
       2 * 60 * 1000, // up to 2 minutes per test
@@ -244,11 +213,12 @@ describe("query-results", () => {
           sourceInfo as SourceInfo,
         );
         expect(results).toEqual({ a: "1234", t: "SarifInterpretationData" });
-        expect(spy).toBeCalledWith(
+        expect(spy).toHaveBeenCalledWith(
           { kind: "my-kind", id: "dummy-id", scored: undefined },
           resultsPath,
           interpretedResultsPath,
           sourceInfo,
+          undefined,
         );
       },
       2 * 60 * 1000, // up to 2 minutes per test
@@ -274,7 +244,7 @@ describe("query-results", () => {
           sourceInfo as SourceInfo,
         );
         // We do not re-interpret if we are reading from a SARIF file.
-        expect(spy).not.toBeCalled();
+        expect(spy).not.toHaveBeenCalled();
 
         expect(results).toHaveProperty("t", "SarifInterpretationData");
         expect(results).toHaveProperty("runs[0].results");
@@ -308,7 +278,7 @@ describe("query-results", () => {
         );
 
         // We do not attempt to re-interpret if we are reading from a SARIF file.
-        expect(spy).not.toBeCalled();
+        expect(spy).not.toHaveBeenCalled();
       },
       2 * 60 * 1000, // up to 2 minutes per test
     );
@@ -321,7 +291,7 @@ describe("query-results", () => {
         });
 
         const finished = new Promise((res, rej) => {
-          validSarifStream.addListener("close", res);
+          validSarifStream.addListener("close", () => res(undefined));
           validSarifStream.addListener("error", rej);
         });
 
@@ -365,7 +335,7 @@ describe("query-results", () => {
           sourceInfo as SourceInfo,
         );
         // We do not re-interpret if we are reading from a SARIF file.
-        expect(spy).not.toBeCalled();
+        expect(spy).not.toHaveBeenCalled();
 
         expect(results).toHaveProperty("t", "SarifInterpretationData");
         expect(results).toHaveProperty("runs[0].results");
@@ -387,7 +357,7 @@ describe("query-results", () => {
         });
 
         const finished = new Promise((res, rej) => {
-          invalidSarifStream.addListener("close", res);
+          invalidSarifStream.addListener("close", () => res(undefined));
           invalidSarifStream.addListener("error", rej);
         });
 
@@ -429,7 +399,7 @@ describe("query-results", () => {
         );
 
         // We do not attempt to re-interpret if we are reading from a SARIF file.
-        expect(spy).not.toBeCalled();
+        expect(spy).not.toHaveBeenCalled();
       },
       2 * 60 * 1000, // up to 2 minutes per test
     );
@@ -438,7 +408,7 @@ describe("query-results", () => {
   function safeDel(file: string) {
     try {
       unlinkSync(file);
-    } catch (e) {
+    } catch {
       // ignore
     }
   }
@@ -446,20 +416,17 @@ describe("query-results", () => {
   function createMockQueryWithResults(
     queryPath: string,
     didRunSuccessfully = true,
-    hasInterpretedResults = true,
     dbPath = "/a/b/c",
-    includeSpies = true,
   ): QueryWithResults {
     // pretend that the results path exists
     const resultsPath = join(queryPath, "results.bqrs");
     mkdirpSync(queryPath);
     writeFileSync(resultsPath, "", "utf8");
 
-    const query = new QueryInProgress(
+    const queryEvalInfo = new QueryEvaluationInfo(
       queryPath,
       Uri.file(dbPath).fsPath,
       true,
-      "queryDbscheme",
       undefined,
       {
         name: "vwx",
@@ -467,22 +434,10 @@ describe("query-results", () => {
     );
 
     const result: QueryWithResults = {
-      query: query.queryEvalInfo,
+      query: queryEvalInfo,
       successful: didRunSuccessfully,
       message: "foo",
-      dispose: jest.fn(),
-      result: {
-        evaluationTime: 1,
-        queryId: 0,
-        runId: 0,
-        resultType: QueryResultType.SUCCESS,
-      },
     };
-
-    if (includeSpies) {
-      (query as any).hasInterpretedResults = () =>
-        Promise.resolve(hasInterpretedResults);
-    }
 
     return result;
   }
@@ -504,12 +459,9 @@ describe("query-results", () => {
         isQuickQuery: false,
         isQuickEval: false,
         id: `some-id-${dbName}`,
+        outputDir: new QueryOutputDir("path/to/output/dir"),
       } as InitialQueryInfo,
-      {
-        dispose: () => {
-          /**/
-        },
-      } as CancellationTokenSource,
+      new CancellationTokenSource(),
     );
 
     if (queryWithResults) {

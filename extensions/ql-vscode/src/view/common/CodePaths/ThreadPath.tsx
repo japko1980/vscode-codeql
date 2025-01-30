@@ -1,8 +1,7 @@
-import * as React from "react";
-import styled from "styled-components";
+import { styled } from "styled-components";
 import { VSCodeTag } from "@vscode/webview-ui-toolkit/react";
 
-import {
+import type {
   AnalysisMessage,
   ResultSeverity,
   ThreadFlow,

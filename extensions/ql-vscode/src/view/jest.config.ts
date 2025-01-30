@@ -1,4 +1,5 @@
 import type { Config } from "jest";
+import { transformIgnorePatterns } from "../../test/jest-config";
 
 /*
  * For a detailed explanation regarding each configuration property and type check, visit:
@@ -83,8 +84,8 @@ const config: Config = {
   // A map from regular expressions to module names or to arrays of module names that allow to stub out resources with a single module
   moduleNameMapper: {
     "\\.(jpg|jpeg|png|gif|eot|otf|webp|svg|ttf|woff|woff2|mp4|webm|wav|mp3|m4a|aac|oga)$":
-      "<rootDir>/test/__mocks__/fileMock.ts",
-    "\\.(css|less)$": "<rootDir>/test/__mocks__/styleMock.ts",
+      "<rootDir>/../../test/__mocks__/fileMock.ts",
+    "\\.(css|less)$": "<rootDir>/../../test/__mocks__/styleMock.ts",
   },
 
   // An array of regexp pattern strings, matched against all module paths before considered 'visible' to the module loader
@@ -184,10 +185,7 @@ const config: Config = {
   },
 
   // An array of regexp pattern strings that are matched against all source file paths, matched files will skip transformation
-  transformIgnorePatterns: [
-    // These use ES modules, so need to be transformed
-    "node_modules/(?!(?:@vscode/webview-ui-toolkit|@microsoft/.+|exenv-es6)/.*)",
-  ],
+  transformIgnorePatterns,
 
   // An array of regexp pattern strings that are matched against all modules before the module loader will automatically return a mock for them
   // unmockedModulePathPatterns: undefined,

@@ -1,8 +1,7 @@
-import * as React from "react";
-
-import { ComponentMeta, ComponentStory } from "@storybook/react";
+import type { Meta, StoryFn } from "@storybook/react";
 
 import { faker } from "@faker-js/faker";
+import { customAlphabet } from "nanoid";
 
 import { VariantAnalysisContainer } from "../../view/variant-analysis/VariantAnalysisContainer";
 import { VariantAnalysisAnalyzedRepos } from "../../view/variant-analysis/VariantAnalysisAnalyzedRepos";
@@ -11,12 +10,12 @@ import {
   VariantAnalysisScannedRepositoryDownloadStatus,
   VariantAnalysisStatus,
 } from "../../variant-analysis/shared/variant-analysis";
-import { AnalysisAlert } from "../../variant-analysis/shared/analysis-result";
+import type { AnalysisAlert } from "../../variant-analysis/shared/analysis-result";
 import { createMockVariantAnalysis } from "../../../test/factories/variant-analysis/shared/variant-analysis";
 import { createMockRepositoryWithMetadata } from "../../../test/factories/variant-analysis/shared/repository";
 import { createMockScannedRepo } from "../../../test/factories/variant-analysis/shared/scanned-repositories";
 
-import * as analysesResults from "../data/analysesResultsMessage.json";
+import { analysesResults } from "../data/analysesResultsMessage.json";
 
 export default {
   title: "Variant Analysis/Analyzed Repos",
@@ -28,16 +27,16 @@ export default {
       </VariantAnalysisContainer>
     ),
   ],
-} as ComponentMeta<typeof VariantAnalysisAnalyzedRepos>;
+} as Meta<typeof VariantAnalysisAnalyzedRepos>;
 
-const Template: ComponentStory<typeof VariantAnalysisAnalyzedRepos> = (
-  args,
-) => <VariantAnalysisAnalyzedRepos {...args} />;
+const Template: StoryFn<typeof VariantAnalysisAnalyzedRepos> = (args) => (
+  <VariantAnalysisAnalyzedRepos {...args} />
+);
 
 const interpretedResultsForRepo = (
   nwo: string,
 ): AnalysisAlert[] | undefined => {
-  return analysesResults.analysesResults.find((v) => v.nwo === nwo)
+  return analysesResults.find((v) => v.nwo === nwo)
     ?.interpretedResults as AnalysisAlert[];
 };
 
@@ -127,24 +126,19 @@ Example.args = {
 };
 
 faker.seed(42);
-const uniqueStore = {};
 
 const manyScannedRepos = Array.from({ length: 1000 }, (_, i) => {
   const mockedScannedRepo = createMockScannedRepo();
-
+  const nanoid = customAlphabet("123456789");
   return {
     ...mockedScannedRepo,
     analysisStatus: VariantAnalysisRepoStatus.Succeeded,
-    resultCount: faker.datatype.number({ min: 0, max: 1000 }),
+    resultCount: faker.number.int({ min: 0, max: 1000 }),
     repository: {
       ...mockedScannedRepo.repository,
       // We need to ensure the ID is unique for React keys
-      id: faker.helpers.unique(faker.datatype.number, [], {
-        store: uniqueStore,
-      }),
-      fullName: `octodemo/${faker.helpers.unique(faker.random.word, [], {
-        store: uniqueStore,
-      })}`,
+      id: parseInt(nanoid()),
+      fullName: `octodemo/${nanoid()}`,
     },
   };
 });

@@ -1,12 +1,12 @@
-import { OctokitResponse } from "@octokit/types/dist-types";
-import { Credentials } from "../../common/authentication";
-import { VariantAnalysisSubmission } from "../shared/variant-analysis";
-import {
+import type { OctokitResponse } from "@octokit/types/dist-types";
+import type { Credentials } from "../../common/authentication";
+import type { VariantAnalysisSubmission } from "../shared/variant-analysis";
+import type {
   VariantAnalysis,
   VariantAnalysisRepoTask,
   VariantAnalysisSubmissionRequest,
 } from "./variant-analysis";
-import { Repository } from "./repository";
+import type { Repository } from "./repository";
 
 export async function submitVariantAnalysis(
   credentials: Credentials,
@@ -14,13 +14,13 @@ export async function submitVariantAnalysis(
 ): Promise<VariantAnalysis> {
   const octokit = await credentials.getOctokit();
 
-  const { actionRepoRef, query, databases, controllerRepoId } =
+  const { actionRepoRef, language, pack, databases, controllerRepoId } =
     submissionDetails;
 
   const data: VariantAnalysisSubmissionRequest = {
     action_repo_ref: actionRepoRef,
-    language: query.language,
-    query_pack: query.pack,
+    language,
+    query_pack: pack,
     repositories: databases.repositories,
     repository_lists: databases.repositoryLists,
     repository_owners: databases.repositoryOwners,

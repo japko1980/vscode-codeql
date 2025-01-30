@@ -1,39 +1,44 @@
 import { join } from "path";
-import * as vscode from "vscode";
+import type { ExtensionContext } from "vscode";
+import { ThemeColor, ThemeIcon, Uri, workspace } from "vscode";
 
-import { extLogger } from "../../../../src/common";
-import {
-  QueryHistoryConfig,
-  QueryHistoryConfigListener,
-} from "../../../../src/config";
-import { LocalQueryInfo } from "../../../../src/query-results";
-import { DatabaseManager } from "../../../../src/local-databases";
-import { tmpDir } from "../../../../src/helpers";
+import { extLogger } from "../../../../src/common/logging/vscode";
+import { QueryHistoryConfigListener } from "../../../../src/config";
+import type { LocalQueryInfo } from "../../../../src/query-results";
+import type { DatabaseManager } from "../../../../src/databases/local-databases";
+import { tmpDir } from "../../../../src/tmp-dir";
 import { HistoryItemLabelProvider } from "../../../../src/query-history/history-item-label-provider";
-import { ResultsView } from "../../../../src/interface";
-import { EvalLogViewer } from "../../../../src/eval-log-viewer";
-import { QueryRunner } from "../../../../src/queryRunner";
-import { VariantAnalysisManager } from "../../../../src/variant-analysis/variant-analysis-manager";
-import { QueryHistoryInfo } from "../../../../src/query-history/query-history-info";
+import type { ResultsView } from "../../../../src/local-queries";
+import type { EvalLogViewer } from "../../../../src/query-evaluation-logging";
+import type { QueryRunner } from "../../../../src/query-server/query-runner";
+import type { VariantAnalysisManager } from "../../../../src/variant-analysis/variant-analysis-manager";
+import type { QueryHistoryInfo } from "../../../../src/query-history/query-history-info";
 import {
   createMockLocalQueryInfo,
   createMockQueryWithResults,
 } from "../../../factories/query-history/local-query-history-item";
-import { shuffleHistoryItems } from "../../utils/query-history-helpers";
+import { shuffle } from "../../utils/list-helpers";
 import { createMockVariantAnalysisHistoryItem } from "../../../factories/query-history/variant-analysis-history-item";
-import { VariantAnalysisHistoryItem } from "../../../../src/query-history/variant-analysis-history-item";
-import { QueryStatus } from "../../../../src/query-status";
+import type { VariantAnalysisHistoryItem } from "../../../../src/query-history/variant-analysis-history-item";
+import { QueryStatus } from "../../../../src/query-history/query-status";
 import { VariantAnalysisStatus } from "../../../../src/variant-analysis/shared/variant-analysis";
 import {
   HistoryTreeDataProvider,
   SortOrder,
 } from "../../../../src/query-history/history-tree-data-provider";
 import { QueryHistoryManager } from "../../../../src/query-history/query-history-manager";
+import { createMockQueryHistoryDirs } from "../../../factories/query-history/query-history-dirs";
+import { createMockApp } from "../../../__mocks__/appMock";
+import { LanguageContextStore } from "../../../../src/language-context-store";
+import type { App } from "../../../../src/common/app";
+import { QueryLanguage } from "../../../../src/common/query-language";
 
 describe("HistoryTreeDataProvider", () => {
   const mockExtensionLocation = join(tmpDir.name, "mock-extension-location");
+  let app: App;
   let configListener: QueryHistoryConfigListener;
   const doCompareCallback = jest.fn();
+  const doComparePerformanceCallback = jest.fn();
 
   let queryHistoryManager: QueryHistoryManager;
 
@@ -46,10 +51,12 @@ describe("HistoryTreeDataProvider", () => {
 
   let historyTreeDataProvider: HistoryTreeDataProvider;
   let labelProvider: HistoryItemLabelProvider;
+  let languageContext: LanguageContextStore;
 
   beforeEach(() => {
     jest.spyOn(extLogger, "log").mockResolvedValue(undefined);
 
+    app = createMockApp({});
     configListener = new QueryHistoryConfigListener();
     localQueriesResultsViewStub = {
       showResults: jest.fn(),
@@ -115,15 +122,18 @@ describe("HistoryTreeDataProvider", () => {
         variantAnalysisStatus: VariantAnalysisStatus.InProgress,
       }),
     ];
-    allHistory = shuffleHistoryItems([
-      ...localQueryHistory,
-      ...variantAnalysisHistory,
-    ]);
+    allHistory = shuffle([...localQueryHistory, ...variantAnalysisHistory]);
 
     labelProvider = new HistoryItemLabelProvider({
-      /**/
-    } as QueryHistoryConfig);
-    historyTreeDataProvider = new HistoryTreeDataProvider(labelProvider);
+      format: "",
+      ttlInMillis: 0,
+      onDidChangeConfiguration: jest.fn(),
+    });
+    languageContext = new LanguageContextStore(app);
+    historyTreeDataProvider = new HistoryTreeDataProvider(
+      labelProvider,
+      languageContext,
+    );
   });
 
   afterEach(async () => {
@@ -154,7 +164,7 @@ describe("HistoryTreeDataProvider", () => {
       });
       expect(treeItem.label).toContain("query-file.ql");
       expect(treeItem.contextValue).toBe("rawResultsItem");
-      expect(treeItem.iconPath).toEqual(new vscode.ThemeIcon("database"));
+      expect(treeItem.iconPath).toEqual(new ThemeIcon("database"));
     });
 
     it("should get a tree item with interpreted results", async () => {
@@ -170,7 +180,7 @@ describe("HistoryTreeDataProvider", () => {
         mockQueryWithInterpretedResults,
       );
       expect(treeItem.contextValue).toBe("interpretedResultsItem");
-      expect(treeItem.iconPath).toEqual(new vscode.ThemeIcon("database"));
+      expect(treeItem.iconPath).toEqual(new ThemeIcon("database"));
     });
 
     it("should get a tree item that did not complete successfully", async () => {
@@ -184,7 +194,7 @@ describe("HistoryTreeDataProvider", () => {
 
       const treeItem = await historyTreeDataProvider.getTreeItem(mockQuery);
       expect(treeItem.iconPath).toEqual(
-        new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground")),
+        new ThemeIcon("error", new ThemeColor("errorForeground")),
       );
     });
 
@@ -196,7 +206,7 @@ describe("HistoryTreeDataProvider", () => {
 
       const treeItem = await historyTreeDataProvider.getTreeItem(mockQuery);
       expect(treeItem.iconPath).toEqual(
-        new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground")),
+        new ThemeIcon("error", new ThemeColor("errorForeground")),
       );
     });
 
@@ -417,26 +427,90 @@ describe("HistoryTreeDataProvider", () => {
         expect(children).toEqual(expected);
       });
     });
+
+    describe("filtering", () => {
+      const history = [
+        createMockLocalQueryInfo({
+          userSpecifiedLabel: "a",
+          // No language at all => unknown
+        }),
+        createMockVariantAnalysisHistoryItem({
+          userSpecifiedLabel: "b",
+          // No specified language => javascript
+        }),
+        createMockLocalQueryInfo({
+          userSpecifiedLabel: "c",
+          language: QueryLanguage.Python,
+        }),
+        createMockVariantAnalysisHistoryItem({
+          userSpecifiedLabel: "d",
+          language: QueryLanguage.Java,
+        }),
+      ];
+
+      let treeDataProvider: HistoryTreeDataProvider;
+
+      beforeEach(async () => {
+        queryHistoryManager = await createMockQueryHistory(allHistory);
+        (queryHistoryManager.treeDataProvider as any).history = [...history];
+        treeDataProvider = queryHistoryManager.treeDataProvider;
+      });
+
+      it("should get all if no filter is provided", async () => {
+        const expected = [history[0], history[1], history[2], history[3]];
+        treeDataProvider.sortOrder = SortOrder.NameAsc;
+
+        const children = await treeDataProvider.getChildren();
+        expect(children).toEqual(expected);
+      });
+
+      it("should filter local runs by language", async () => {
+        const expected = [history[3]];
+        treeDataProvider.sortOrder = SortOrder.NameAsc;
+
+        await languageContext.setLanguageContext(QueryLanguage.Java);
+
+        const children = await treeDataProvider.getChildren();
+        expect(children).toEqual(expected);
+      });
+
+      it("should filter variant analysis runs by language", async () => {
+        const expected = [history[2]];
+        treeDataProvider.sortOrder = SortOrder.NameAsc;
+
+        await languageContext.setLanguageContext(QueryLanguage.Python);
+
+        const children = await treeDataProvider.getChildren();
+        expect(children).toEqual(expected);
+      });
+    });
   });
 
   async function createMockQueryHistory(allHistory: QueryHistoryInfo[]) {
     const qhm = new QueryHistoryManager(
+      app,
       {} as QueryRunner,
       {} as DatabaseManager,
       localQueriesResultsViewStub,
       variantAnalysisManagerStub,
       {} as EvalLogViewer,
-      "xxx",
+      createMockQueryHistoryDirs(),
       {
-        globalStorageUri: vscode.Uri.file(mockExtensionLocation),
-        extensionPath: vscode.Uri.file("/x/y/z").fsPath,
-      } as vscode.ExtensionContext,
+        globalStorageUri: Uri.file(mockExtensionLocation),
+        extensionPath: Uri.file("/x/y/z").fsPath,
+      } as ExtensionContext,
       configListener,
-      new HistoryItemLabelProvider({} as QueryHistoryConfig),
+      new HistoryItemLabelProvider({
+        format: "",
+        ttlInMillis: 0,
+        onDidChangeConfiguration: jest.fn(),
+      }),
+      languageContext,
       doCompareCallback,
+      doComparePerformanceCallback,
     );
     (qhm.treeDataProvider as any).history = [...allHistory];
-    await vscode.workspace.saveAll();
+    await workspace.saveAll();
     await qhm.refreshTreeView();
     return qhm;
   }

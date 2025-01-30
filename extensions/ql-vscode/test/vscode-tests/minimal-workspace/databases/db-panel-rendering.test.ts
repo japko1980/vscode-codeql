@@ -1,20 +1,17 @@
 import { TreeItemCollapsibleState, ThemeIcon } from "vscode";
 import { join } from "path";
 import { ensureDir, remove, writeJson } from "fs-extra";
-import { DbConfig } from "../../../../src/databases/config/db-config";
+import type { DbConfig } from "../../../../src/databases/config/db-config";
 import { DbManager } from "../../../../src/databases/db-manager";
 import { DbConfigStore } from "../../../../src/databases/config/db-config-store";
 import { DbTreeDataProvider } from "../../../../src/databases/ui/db-tree-data-provider";
-import {
-  DbItemKind,
-  LocalDatabaseDbItem,
-} from "../../../../src/databases/db-item";
-import { DbTreeViewItem } from "../../../../src/databases/ui/db-tree-view-item";
-import { ExtensionApp } from "../../../../src/common/vscode/vscode-app";
+import { DbItemKind } from "../../../../src/databases/db-item";
+import type { DbTreeViewItem } from "../../../../src/databases/ui/db-tree-view-item";
+import { ExtensionApp } from "../../../../src/common/vscode/extension-app";
 import { createMockExtensionContext } from "../../../factories/extension-context";
 import { createDbConfig } from "../../../factories/db-config-factories";
 import { setRemoteControllerRepo } from "../../../../src/config";
-import { QueryLanguage } from "../../../../src/common/query-language";
+import { createMockVariantAnalysisConfig } from "../../../factories/config";
 
 describe("db panel rendering nodes", () => {
   const workspaceStoragePath = join(__dirname, "test-workspace-storage");
@@ -39,7 +36,11 @@ describe("db panel rendering nodes", () => {
     const app = new ExtensionApp(extensionContext);
 
     dbConfigStore = new DbConfigStore(app, false);
-    dbManager = new DbManager(app, dbConfigStore);
+    dbManager = new DbManager(
+      app,
+      dbConfigStore,
+      createMockVariantAnalysisConfig(),
+    );
   });
 
   beforeEach(async () => {
@@ -174,148 +175,6 @@ describe("db panel rendering nodes", () => {
       checkRemoteRepoItem(repoItems[0], "owner1/repo1");
       checkRemoteRepoItem(repoItems[1], "owner1/repo2");
     });
-
-    it.skip("should render local list nodes", async () => {
-      const dbConfig: DbConfig = createDbConfig({
-        localLists: [
-          {
-            name: "my-list-1",
-            databases: [
-              {
-                name: "db1",
-                dateAdded: 1668428293677,
-                language: QueryLanguage.Cpp,
-                storagePath: "/path/to/db1/",
-              },
-              {
-                name: "db2",
-                dateAdded: 1668428472731,
-                language: QueryLanguage.Cpp,
-                storagePath: "/path/to/db2/",
-              },
-            ],
-          },
-          {
-            name: "my-list-2",
-            databases: [
-              {
-                name: "db3",
-                dateAdded: 1668428472731,
-                language: "ruby",
-                storagePath: "/path/to/db3/",
-              },
-            ],
-          },
-        ],
-      });
-
-      await saveDbConfig(dbConfig);
-
-      const dbTreeItems = await dbTreeDataProvider.getChildren();
-      expect(dbTreeItems).toBeTruthy();
-
-      const localRootNode = dbTreeItems?.find(
-        (i) => i.dbItem?.kind === DbItemKind.RootLocal,
-      );
-      expect(localRootNode).toBeTruthy();
-
-      expect(localRootNode!.dbItem).toBeTruthy();
-      expect(localRootNode!.collapsibleState).toBe(
-        TreeItemCollapsibleState.Collapsed,
-      );
-      expect(localRootNode!.children).toBeTruthy();
-      expect(localRootNode!.children.length).toBe(2);
-
-      const localListItems = localRootNode!.children.filter(
-        (item) => item.dbItem?.kind === DbItemKind.LocalList,
-      );
-      expect(localListItems.length).toBe(2);
-      checkLocalListItem(localListItems[0], "my-list-1", [
-        {
-          kind: DbItemKind.LocalDatabase,
-          databaseName: "db1",
-          dateAdded: 1668428293677,
-          language: QueryLanguage.Cpp,
-          storagePath: "/path/to/db1/",
-          selected: false,
-        },
-        {
-          kind: DbItemKind.LocalDatabase,
-          databaseName: "db2",
-          dateAdded: 1668428472731,
-          language: QueryLanguage.Cpp,
-          storagePath: "/path/to/db2/",
-          selected: false,
-        },
-      ]);
-      checkLocalListItem(localListItems[1], "my-list-2", [
-        {
-          kind: DbItemKind.LocalDatabase,
-          databaseName: "db3",
-          dateAdded: 1668428472731,
-          language: "ruby",
-          storagePath: "/path/to/db3/",
-          selected: false,
-        },
-      ]);
-    });
-
-    it.skip("should render local database nodes", async () => {
-      const dbConfig: DbConfig = createDbConfig({
-        localDbs: [
-          {
-            name: "db1",
-            dateAdded: 1668428293677,
-            language: "csharp",
-            storagePath: "/path/to/db1/",
-          },
-          {
-            name: "db2",
-            dateAdded: 1668428472731,
-            language: "go",
-            storagePath: "/path/to/db2/",
-          },
-        ],
-      });
-
-      await saveDbConfig(dbConfig);
-
-      const dbTreeItems = await dbTreeDataProvider.getChildren();
-
-      expect(dbTreeItems).toBeTruthy();
-      const localRootNode = dbTreeItems?.find(
-        (i) => i.dbItem?.kind === DbItemKind.RootLocal,
-      );
-      expect(localRootNode).toBeTruthy();
-
-      expect(localRootNode!.dbItem).toBeTruthy();
-      expect(localRootNode!.collapsibleState).toBe(
-        TreeItemCollapsibleState.Collapsed,
-      );
-      expect(localRootNode!.children).toBeTruthy();
-      expect(localRootNode!.children.length).toBe(2);
-
-      const localDatabaseItems = localRootNode!.children.filter(
-        (item) => item.dbItem?.kind === DbItemKind.LocalDatabase,
-      );
-      expect(localDatabaseItems.length).toBe(2);
-      checkLocalDatabaseItem(localDatabaseItems[0], {
-        kind: DbItemKind.LocalDatabase,
-        databaseName: "db1",
-        dateAdded: 1668428293677,
-        language: "csharp",
-        storagePath: "/path/to/db1/",
-        selected: false,
-      });
-      checkLocalDatabaseItem(localDatabaseItems[1], {
-        kind: DbItemKind.LocalDatabase,
-        databaseName: "db2",
-        dateAdded: 1668428472731,
-        language: "go",
-        storagePath: "/path/to/db2/",
-        selected: false,
-      });
-    });
   });
 
   async function saveDbConfig(dbConfig: DbConfig): Promise<void> {
@@ -349,7 +208,12 @@ describe("db panel rendering nodes", () => {
     expect(item.tooltip).toBeUndefined();
     expect(item.iconPath).toBeUndefined();
     expect(item.collapsibleState).toBe(TreeItemCollapsibleState.Collapsed);
-    checkDbItemActions(item, ["canBeSelected", "canBeRenamed", "canBeRemoved"]);
+    checkDbItemActions(item, [
+      "canBeSelected",
+      "canBeRenamed",
+      "canBeRemoved",
+      "canImportCodeSearch",
+    ]);
     expect(item.children).toBeTruthy();
     expect(item.children.length).toBe(repos.length);
 
@@ -382,35 +246,6 @@ describe("db panel rendering nodes", () => {
       "canBeRemoved",
       "canBeOpenedOnGitHub",
     ]);
-  }
-
-  function checkLocalListItem(
-    item: DbTreeViewItem,
-    listName: string,
-    databases: LocalDatabaseDbItem[],
-  ): void {
-    expect(item.label).toBe(listName);
-    expect(item.tooltip).toBeUndefined();
-    expect(item.iconPath).toBeUndefined();
-    expect(item.collapsibleState).toBe(TreeItemCollapsibleState.Collapsed);
-    checkDbItemActions(item, ["canBeSelected", "canBeRemoved", "canBeRenamed"]);
-    expect(item.children).toBeTruthy();
-    expect(item.children.length).toBe(databases.length);
-
-    for (let i = 0; i < databases.length; i++) {
-      checkLocalDatabaseItem(item.children[i], databases[i]);
-    }
-  }
-
-  function checkLocalDatabaseItem(
-    item: DbTreeViewItem,
-    database: LocalDatabaseDbItem,
-  ): void {
-    expect(item.label).toBe(database.databaseName);
-    expect(item.tooltip).toBe(`Language: ${database.language}`);
-    expect(item.iconPath).toEqual(new ThemeIcon("database"));
-    expect(item.collapsibleState).toBe(TreeItemCollapsibleState.None);
-    checkDbItemActions(item, ["canBeSelected", "canBeRemoved", "canBeRenamed"]);
   }
 
   function checkDbItemActions(item: DbTreeViewItem, actions: string[]): void {

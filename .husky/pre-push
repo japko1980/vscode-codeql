@@ -1,0 +1,1 @@
+cd extensions/ql-vscode && ./scripts/forbid-test-only

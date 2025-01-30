@@ -8,18 +8,25 @@ import {
 } from "fs-extra";
 import { join } from "path";
 
-import { commands, ExtensionContext, Uri } from "vscode";
-import { QueryHistoryConfig } from "../../../../src/config";
-import { DatabaseManager } from "../../../../src/local-databases";
-import { tmpDir, walkDirectory } from "../../../../src/helpers";
+import type { ExtensionContext } from "vscode";
+import { Uri } from "vscode";
+import type { DatabaseManager } from "../../../../src/databases/local-databases";
+import { tmpDir } from "../../../../src/tmp-dir";
+import { walkDirectory } from "../../../../src/common/files";
 import { DisposableBucket } from "../../disposable-bucket";
 import { testDisposeHandler } from "../../test-dispose-handler";
 import { HistoryItemLabelProvider } from "../../../../src/query-history/history-item-label-provider";
-import { ResultsView } from "../../../../src/interface";
-import { EvalLogViewer } from "../../../../src/eval-log-viewer";
-import { QueryRunner } from "../../../../src/queryRunner";
-import { VariantAnalysisManager } from "../../../../src/variant-analysis/variant-analysis-manager";
+import type { ResultsView } from "../../../../src/local-queries";
+import type { EvalLogViewer } from "../../../../src/query-evaluation-logging";
+import type { QueryRunner } from "../../../../src/query-server/query-runner";
+import type { VariantAnalysisManager } from "../../../../src/variant-analysis/variant-analysis-manager";
 import { QueryHistoryManager } from "../../../../src/query-history/query-history-manager";
+import { mockedObject } from "../../utils/mocking.helpers";
+import { createMockQueryHistoryDirs } from "../../../factories/query-history/query-history-dirs";
+import { createMockApp } from "../../../__mocks__/appMock";
+import { LanguageContextStore } from "../../../../src/language-context-store";
+import { mapQueryHistoryVariantAnalysisToDomainModel } from "../../../../src/query-history/store/query-history-variant-analysis-dto-mapper";
+import type { VariantAnalysisHistoryItem } from "../../../../src/query-history/variant-analysis-history-item";
 
 // set a higher timeout since recursive delete may take a while, expecially on Windows.
 jest.setTimeout(120000);
@@ -36,7 +43,7 @@ describe("Variant Analyses and QueryHistoryManager", () => {
   };
 
   let qhm: QueryHistoryManager;
-  let rawQueryHistory: any;
+  let queryHistory: VariantAnalysisHistoryItem[];
   let disposables: DisposableBucket;
 
   const rehydrateVariantAnalysisStub = jest.fn();
@@ -53,9 +60,12 @@ describe("Variant Analyses and QueryHistoryManager", () => {
     rehydrateVariantAnalysis: rehydrateVariantAnalysisStub,
     onVariantAnalysisStatusUpdated: jest.fn(),
     showView: showViewStub,
+    openQueryText: jest.fn(),
   } as any as VariantAnalysisManager;
 
-  let executeCommandSpy: jest.SpiedFunction<typeof commands.executeCommand>;
+  let openQueryTextSpy: jest.SpiedFunction<
+    typeof variantAnalysisManagerStub.openQueryText
+  >;
 
   beforeEach(async () => {
     // Since these tests change the state of the query history manager, we need to copy the original
@@ -64,31 +74,43 @@ describe("Variant Analyses and QueryHistoryManager", () => {
 
     disposables = new DisposableBucket();
 
-    rawQueryHistory = readJSONSync(
+    queryHistory = readJSONSync(
       join(STORAGE_DIR, "workspace-query-history.json"),
-    ).queries;
+    ).queries.map(mapQueryHistoryVariantAnalysisToDomainModel);
+
+    const app = createMockApp({});
 
     qhm = new QueryHistoryManager(
+      app,
       {} as QueryRunner,
       {} as DatabaseManager,
       localQueriesResultsViewStub,
       variantAnalysisManagerStub,
       {} as EvalLogViewer,
-      STORAGE_DIR,
-      {
+      createMockQueryHistoryDirs({ localQueriesDirPath: STORAGE_DIR }),
+      mockedObject<ExtensionContext>({
         globalStorageUri: Uri.file(STORAGE_DIR),
+        storageUri: undefined,
         extensionPath: EXTENSION_PATH,
-      } as ExtensionContext,
+      }),
       {
+        format: "",
+        ttlInMillis: 0,
         onDidChangeConfiguration: () => new DisposableBucket(),
-      } as unknown as QueryHistoryConfig,
-      new HistoryItemLabelProvider({} as QueryHistoryConfig),
+      },
+      new HistoryItemLabelProvider({
+        format: "",
+        ttlInMillis: 0,
+        onDidChangeConfiguration: jest.fn(),
+      }),
+      new LanguageContextStore(app),
+      asyncNoop,
       asyncNoop,
     );
     disposables.push(qhm);
 
-    executeCommandSpy = jest
-      .spyOn(commands, "executeCommand")
+    openQueryTextSpy = jest
+      .spyOn(variantAnalysisManagerStub, "openQueryText")
       .mockResolvedValue(undefined);
   });
 
@@ -100,18 +122,18 @@ describe("Variant Analyses and QueryHistoryManager", () => {
   it("should read query history that has variant analysis history items", async () => {
     await qhm.readQueryHistory();
 
-    expect(rehydrateVariantAnalysisStub).toBeCalledTimes(2);
+    expect(rehydrateVariantAnalysisStub).toHaveBeenCalledTimes(2);
     expect(rehydrateVariantAnalysisStub).toHaveBeenNthCalledWith(
       1,
-      rawQueryHistory[0].variantAnalysis,
+      queryHistory[0].variantAnalysis,
     );
     expect(rehydrateVariantAnalysisStub).toHaveBeenNthCalledWith(
       2,
-      rawQueryHistory[1].variantAnalysis,
+      queryHistory[1].variantAnalysis,
     );
 
-    expect(qhm.treeDataProvider.allHistory[0]).toEqual(rawQueryHistory[0]);
-    expect(qhm.treeDataProvider.allHistory[1]).toEqual(rawQueryHistory[1]);
+    expect(qhm.treeDataProvider.allHistory[0]).toEqual(queryHistory[0]);
+    expect(qhm.treeDataProvider.allHistory[1]).toEqual(queryHistory[1]);
     expect(qhm.treeDataProvider.allHistory.length).toBe(2);
   });
 
@@ -119,15 +141,15 @@ describe("Variant Analyses and QueryHistoryManager", () => {
     await qhm.readQueryHistory();
 
     // Remove the first variant analysis
-    await qhm.handleRemoveHistoryItem(qhm.treeDataProvider.allHistory[0]);
+    await qhm.handleRemoveHistoryItem([qhm.treeDataProvider.allHistory[0]]);
 
     // Add it back to the history
-    qhm.addQuery(rawQueryHistory[0]);
-    expect(removeVariantAnalysisStub).toBeCalledTimes(1);
-    expect(rehydrateVariantAnalysisStub).toBeCalledTimes(2);
+    qhm.addQuery(queryHistory[0]);
+    expect(removeVariantAnalysisStub).toHaveBeenCalledTimes(1);
+    expect(rehydrateVariantAnalysisStub).toHaveBeenCalledTimes(2);
     expect(qhm.treeDataProvider.allHistory).toEqual([
-      rawQueryHistory[1],
-      rawQueryHistory[0],
+      queryHistory[1],
+      queryHistory[0],
     ]);
   });
 
@@ -136,7 +158,7 @@ describe("Variant Analyses and QueryHistoryManager", () => {
 
     // Remove both queries
     // Just for fun, let's do it in reverse order
-    await qhm.handleRemoveHistoryItem(undefined!, [
+    await qhm.handleRemoveHistoryItem([
       qhm.treeDataProvider.allHistory[1],
       qhm.treeDataProvider.allHistory[0],
     ]);
@@ -144,11 +166,11 @@ describe("Variant Analyses and QueryHistoryManager", () => {
     expect(removeVariantAnalysisStub).toHaveBeenCalledTimes(2);
     expect(removeVariantAnalysisStub).toHaveBeenNthCalledWith(
       1,
-      rawQueryHistory[1].variantAnalysis,
+      queryHistory[1].variantAnalysis,
     );
     expect(removeVariantAnalysisStub).toHaveBeenNthCalledWith(
       2,
-      rawQueryHistory[0].variantAnalysis,
+      queryHistory[0].variantAnalysis,
     );
     expect(qhm.treeDataProvider.allHistory).toEqual([]);
 
@@ -164,17 +186,18 @@ describe("Variant Analyses and QueryHistoryManager", () => {
   it("should handle a click", async () => {
     await qhm.readQueryHistory();
 
-    await qhm.handleItemClicked(qhm.treeDataProvider.allHistory[0], []);
-    expect(showViewStub).toBeCalledWith(rawQueryHistory[0].variantAnalysis.id);
+    await qhm.handleItemClicked(qhm.treeDataProvider.allHistory[0]);
+    expect(showViewStub).toHaveBeenCalledWith(
+      queryHistory[0].variantAnalysis.id,
+    );
   });
 
   it("should get the query text", async () => {
     await qhm.readQueryHistory();
-    await qhm.handleShowQueryText(qhm.treeDataProvider.allHistory[0], []);
+    await qhm.handleShowQueryText(qhm.treeDataProvider.allHistory[0]);
 
-    expect(executeCommandSpy).toHaveBeenCalledWith(
-      "codeQL.openVariantAnalysisQueryText",
-      rawQueryHistory[0].variantAnalysis.id,
+    expect(openQueryTextSpy).toHaveBeenCalledWith(
+      queryHistory[0].variantAnalysis.id,
     );
   });
 

@@ -1,39 +1,27 @@
 import { pathExists, outputJSON, readJSON, readJSONSync } from "fs-extra";
 import { join } from "path";
+import type { DbConfig, SelectedDbItem } from "./db-config";
 import {
-  clearLocalDbConfig,
   cloneDbConfig,
-  DbConfig,
-  initializeLocalDbConfig,
-  removeLocalDb,
-  removeLocalList,
   removeRemoteList,
   removeRemoteOwner,
   removeRemoteRepo,
-  renameLocalDb,
-  renameLocalList,
   renameRemoteList,
-  SelectedDbItem,
   DB_CONFIG_VERSION,
   SelectedDbItemKind,
 } from "./db-config";
-import * as chokidar from "chokidar";
-import { DisposableObject, DisposeHandler } from "../../pure/disposable-object";
+import type { FSWatcher } from "chokidar";
+import { watch } from "chokidar";
+import type { DisposeHandler } from "../../common/disposable-object";
+import { DisposableObject } from "../../common/disposable-object";
 import { DbConfigValidator } from "./db-config-validator";
-import { App } from "../../common/app";
-import { AppEvent, AppEventEmitter } from "../../common/events";
-import {
-  DbConfigValidationError,
-  DbConfigValidationErrorKind,
-} from "../db-validation-errors";
+import type { App } from "../../common/app";
+import type { AppEvent, AppEventEmitter } from "../../common/events";
+import type { DbConfigValidationError } from "../db-validation-errors";
+import { DbConfigValidationErrorKind } from "../db-validation-errors";
 import { ValueResult } from "../../common/value-result";
-import {
-  LocalDatabaseDbItem,
-  LocalListDbItem,
-  RemoteUserDefinedListDbItem,
-  DbItem,
-  DbItemKind,
-} from "../db-item";
+import type { RemoteUserDefinedListDbItem, DbItem } from "../db-item";
+import { DbItemKind } from "../db-item";
 
 export class DbConfigStore extends DisposableObject {
   public static readonly databaseConfigFileName = "databases.json";
@@ -46,7 +34,7 @@ export class DbConfigStore extends DisposableObject {
 
   private config: DbConfig | undefined;
   private configErrors: DbConfigValidationError[];
-  private configWatcher: chokidar.FSWatcher | undefined;
+  private configWatcher: FSWatcher | undefined;
 
   public constructor(
     private readonly app: App,
@@ -61,7 +49,9 @@ export class DbConfigStore extends DisposableObject {
     this.configErrors = [];
     this.configWatcher = undefined;
     this.configValidator = new DbConfigValidator(app.extensionPath);
-    this.onDidChangeConfigEventEmitter = app.createEventEmitter<void>();
+    this.onDidChangeConfigEventEmitter = this.push(
+      app.createEventEmitter<void>(),
+    );
     this.onDidChangeConfig = this.onDidChangeConfigEventEmitter.event;
   }
 
@@ -114,19 +104,8 @@ export class DbConfigStore extends DisposableObject {
     let config: DbConfig;
 
     switch (dbItem.kind) {
-      case DbItemKind.LocalList:
-        config = removeLocalList(this.config, dbItem.listName);
-        break;
       case DbItemKind.RemoteUserDefinedList:
         config = removeRemoteList(this.config, dbItem.listName);
-        break;
-      case DbItemKind.LocalDatabase:
-        // When we start using local databases these need to be removed from disk as well.
-        config = removeLocalDb(
-          this.config,
-          dbItem.databaseName,
-          dbItem.parentListName,
-        );
         break;
       case DbItemKind.RemoteRepo:
         config = removeRemoteRepo(
@@ -141,6 +120,32 @@ export class DbConfigStore extends DisposableObject {
       default:
         throw Error(`Type '${dbItem.kind}' cannot be removed`);
     }
+
+    await this.writeConfig(config);
+  }
+
+  public async addRemoteReposToList(
+    repoNwoList: string[],
+    parentList: string,
+  ): Promise<void> {
+    if (!this.config) {
+      throw Error("Cannot add variant analysis repos if config is not loaded");
+    }
+
+    const config = cloneDbConfig(this.config);
+    const parent = config.databases.variantAnalysis.repositoryLists.find(
+      (list) => list.name === parentList,
+    );
+    if (!parent) {
+      throw Error(`Cannot find parent list '${parentList}'`);
+    }
+
+    // Remove duplicates from the list of repositories.
+    const newRepositoriesList = [
+      ...new Set([...parent.repositories, ...repoNwoList]),
+    ];
+
+    parent.repositories = newRepositoriesList;
 
     await this.writeConfig(config);
   }
@@ -171,7 +176,7 @@ export class DbConfigStore extends DisposableObject {
       if (!parent) {
         throw Error(`Cannot find parent list '${parentList}'`);
       } else {
-        parent.repositories.push(repoNwo);
+        parent.repositories = [...parent.repositories, repoNwo];
       }
     } else {
       config.databases.variantAnalysis.repositories.push(repoNwo);
@@ -198,22 +203,6 @@ export class DbConfigStore extends DisposableObject {
     await this.writeConfig(config);
   }
 
-  public async addLocalList(listName: string): Promise<void> {
-    if (!this.config) {
-      throw Error("Cannot add local list if config is not loaded");
-    }
-
-    this.validateLocalListName(listName);
-
-    const config = cloneDbConfig(this.config);
-    config.databases.local.lists.push({
-      name: listName,
-      databases: [],
-    });
-
-    await this.writeConfig(config);
-  }
-
   public async addRemoteList(listName: string): Promise<void> {
     if (!this.config) {
       throw Error("Cannot add variant analysis list if config is not loaded");
@@ -228,25 +217,6 @@ export class DbConfigStore extends DisposableObject {
     });
 
     await this.writeConfig(config);
-  }
-
-  public async renameLocalList(
-    currentDbItem: LocalListDbItem,
-    newName: string,
-  ) {
-    if (!this.config) {
-      throw Error("Cannot rename local list if config is not loaded");
-    }
-
-    this.validateLocalListName(newName);
-
-    const updatedConfig = renameLocalList(
-      this.config,
-      currentDbItem.listName,
-      newName,
-    );
-
-    await this.writeConfig(updatedConfig);
   }
 
   public async renameRemoteList(
@@ -270,27 +240,6 @@ export class DbConfigStore extends DisposableObject {
     await this.writeConfig(updatedConfig);
   }
 
-  public async renameLocalDb(
-    currentDbItem: LocalDatabaseDbItem,
-    newName: string,
-    parentListName?: string,
-  ): Promise<void> {
-    if (!this.config) {
-      throw Error("Cannot rename local db if config is not loaded");
-    }
-
-    this.validateLocalDbName(newName);
-
-    const updatedConfig = renameLocalDb(
-      this.config,
-      currentDbItem.databaseName,
-      newName,
-      parentListName,
-    );
-
-    await this.writeConfig(updatedConfig);
-  }
-
   public doesRemoteListExist(listName: string): boolean {
     if (!this.config) {
       throw Error(
@@ -301,31 +250,6 @@ export class DbConfigStore extends DisposableObject {
     return this.config.databases.variantAnalysis.repositoryLists.some(
       (l) => l.name === listName,
     );
-  }
-
-  public doesLocalListExist(listName: string): boolean {
-    if (!this.config) {
-      throw Error("Cannot check local list existence if config is not loaded");
-    }
-
-    return this.config.databases.local.lists.some((l) => l.name === listName);
-  }
-
-  public doesLocalDbExist(dbName: string, listName?: string): boolean {
-    if (!this.config) {
-      throw Error(
-        "Cannot check variant analysis repository existence if config is not loaded",
-      );
-    }
-
-    if (listName) {
-      return this.config.databases.local.lists.some(
-        (l) =>
-          l.name === listName && l.databases.some((d) => d.name === dbName),
-      );
-    }
-
-    return this.config.databases.local.databases.some((d) => d.name === dbName);
   }
 
   public doesRemoteDbExist(dbName: string, listName?: string): boolean {
@@ -353,7 +277,6 @@ export class DbConfigStore extends DisposableObject {
   }
 
   private async writeConfig(config: DbConfig): Promise<void> {
-    clearLocalDbConfig(config);
     await outputJSON(this.configPath, config, {
       spaces: 2,
     });
@@ -375,7 +298,7 @@ export class DbConfigStore extends DisposableObject {
     let newConfig: DbConfig | undefined = undefined;
     try {
       newConfig = await readJSON(this.configPath);
-    } catch (e) {
+    } catch {
       this.configErrors = [
         {
           kind: DbConfigValidationErrorKind.InvalidJson,
@@ -385,20 +308,19 @@ export class DbConfigStore extends DisposableObject {
     }
 
     if (newConfig) {
-      initializeLocalDbConfig(newConfig);
       this.configErrors = this.configValidator.validate(newConfig);
     }
 
     if (this.configErrors.length === 0) {
       this.config = newConfig;
-      await this.app.executeCommand(
+      await this.app.commands.execute(
         "setContext",
         "codeQLVariantAnalysisRepositories.configError",
         false,
       );
     } else {
       this.config = undefined;
-      await this.app.executeCommand(
+      await this.app.commands.execute(
         "setContext",
         "codeQLVariantAnalysisRepositories.configError",
         true,
@@ -410,7 +332,7 @@ export class DbConfigStore extends DisposableObject {
     let newConfig: DbConfig | undefined = undefined;
     try {
       newConfig = readJSONSync(this.configPath);
-    } catch (e) {
+    } catch {
       this.configErrors = [
         {
           kind: DbConfigValidationErrorKind.InvalidJson,
@@ -420,20 +342,19 @@ export class DbConfigStore extends DisposableObject {
     }
 
     if (newConfig) {
-      initializeLocalDbConfig(newConfig);
       this.configErrors = this.configValidator.validate(newConfig);
     }
 
     if (this.configErrors.length === 0) {
       this.config = newConfig;
-      void this.app.executeCommand(
+      void this.app.commands.execute(
         "setContext",
         "codeQLVariantAnalysisRepositories.configError",
         false,
       );
     } else {
       this.config = undefined;
-      void this.app.executeCommand(
+      void this.app.commands.execute(
         "setContext",
         "codeQLVariantAnalysisRepositories.configError",
         true,
@@ -443,20 +364,18 @@ export class DbConfigStore extends DisposableObject {
   }
 
   private watchConfig(): void {
-    this.configWatcher = chokidar
-      .watch(this.configPath, {
-        // In some cases, change events are emitted while the file is still
-        // being written. The awaitWriteFinish option tells the watcher to
-        // poll the file size, holding its add and change events until the size
-        // does not change for a configurable amount of time. We set that time
-        // to 1 second, but it may need to be adjusted if there are issues.
-        awaitWriteFinish: {
-          stabilityThreshold: 1000,
-        },
-      })
-      .on("change", () => {
-        this.readConfigSync();
-      });
+    this.configWatcher = watch(this.configPath, {
+      // In some cases, change events are emitted while the file is still
+      // being written. The awaitWriteFinish option tells the watcher to
+      // poll the file size, holding its add and change events until the size
+      // does not change for a configurable amount of time. We set that time
+      // to 1 second, but it may need to be adjusted if there are issues.
+      awaitWriteFinish: {
+        stabilityThreshold: 1000,
+      },
+    }).on("change", () => {
+      this.readConfigSync();
+    });
   }
 
   private createEmptyConfig(): DbConfig {
@@ -468,26 +387,12 @@ export class DbConfigStore extends DisposableObject {
           owners: [],
           repositories: [],
         },
-        local: {
-          lists: [],
-          databases: [],
-        },
       },
       selected: {
         kind: SelectedDbItemKind.VariantAnalysisSystemDefinedList,
         listName: "top_10",
       },
     };
-  }
-
-  private validateLocalListName(listName: string): void {
-    if (listName === "") {
-      throw Error("List name cannot be empty");
-    }
-
-    if (this.doesLocalListExist(listName)) {
-      throw Error(`A local list with the name '${listName}' already exists`);
-    }
   }
 
   private validateRemoteListName(listName: string): void {
@@ -499,16 +404,6 @@ export class DbConfigStore extends DisposableObject {
       throw Error(
         `A variant analysis list with the name '${listName}' already exists`,
       );
-    }
-  }
-
-  private validateLocalDbName(dbName: string): void {
-    if (dbName === "") {
-      throw Error("Database name cannot be empty");
-    }
-
-    if (this.doesLocalDbExist(dbName)) {
-      throw Error(`A local database with the name '${dbName}' already exists`);
     }
   }
 }

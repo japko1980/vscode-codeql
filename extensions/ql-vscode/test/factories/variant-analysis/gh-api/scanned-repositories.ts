@@ -1,5 +1,5 @@
 import { faker } from "@faker-js/faker";
-import {
+import type {
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepository,
 } from "../../../../src/variant-analysis/gh-api/variant-analysis";
@@ -18,8 +18,8 @@ export function createMockScannedRepo(
       private: isPrivate,
     },
     analysis_status: analysisStatus,
-    result_count: faker.datatype.number(),
-    artifact_size_in_bytes: faker.datatype.number(),
+    result_count: faker.number.int(),
+    artifact_size_in_bytes: faker.number.int(),
   };
 }
 

@@ -1,44 +1,31 @@
-import { useEffect, useGlobals } from "@storybook/addons";
+/// <reference types="vite/client" />
+
+import { useEffect } from "react";
 import type {
-  AnyFramework,
   PartialStoryFn as StoryFunction,
   StoryContext,
 } from "@storybook/csf";
 
 import { VSCodeTheme } from "./theme";
 
+import darkThemeStyle from "../../src/stories/vscode-theme-dark.css?url";
+import lightThemeStyle from "../../src/stories/vscode-theme-light.css?url";
+import lightHighContrastThemeStyle from "../../src/stories/vscode-theme-light-high-contrast.css?url";
+import darkHighContrastThemeStyle from "../../src/stories/vscode-theme-dark-high-contrast.css?url";
+import githubLightDefaultThemeStyle from "../../src/stories/vscode-theme-github-light-default.css?url";
+import githubDarkDefaultThemeStyle from "../../src/stories/vscode-theme-github-dark-default.css?url";
+
 const themeFiles: { [key in VSCodeTheme]: string } = {
-  [VSCodeTheme.Dark]:
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("!file-loader?modules!../../src/stories/vscode-theme-dark.css")
-      .default,
-  [VSCodeTheme.Light]:
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("!file-loader?modules!../../src/stories/vscode-theme-light.css")
-      .default,
-  [VSCodeTheme.LightHighContrast]:
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("!file-loader?modules!../../src/stories/vscode-theme-light-high-contrast.css")
-      .default,
-  [VSCodeTheme.DarkHighContrast]:
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("!file-loader?modules!../../src/stories/vscode-theme-dark-high-contrast.css")
-      .default,
-  [VSCodeTheme.GitHubLightDefault]:
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("!file-loader?modules!../../src/stories/vscode-theme-github-light-default.css")
-      .default,
-  [VSCodeTheme.GitHubDarkDefault]:
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    require("!file-loader?modules!../../src/stories/vscode-theme-github-dark-default.css")
-      .default,
+  [VSCodeTheme.Dark]: darkThemeStyle,
+  [VSCodeTheme.Light]: lightThemeStyle,
+  [VSCodeTheme.LightHighContrast]: lightHighContrastThemeStyle,
+  [VSCodeTheme.DarkHighContrast]: darkHighContrastThemeStyle,
+  [VSCodeTheme.GitHubLightDefault]: githubLightDefaultThemeStyle,
+  [VSCodeTheme.GitHubDarkDefault]: githubDarkDefaultThemeStyle,
 };
 
-export const withTheme = (
-  StoryFn: StoryFunction<AnyFramework>,
-  context: StoryContext<AnyFramework>,
-) => {
-  const [{ vscodeTheme }] = useGlobals();
+export const withTheme = (StoryFn: StoryFunction, context: StoryContext) => {
+  const { vscodeTheme } = context.globals;
 
   useEffect(() => {
     const styleSelectorId =

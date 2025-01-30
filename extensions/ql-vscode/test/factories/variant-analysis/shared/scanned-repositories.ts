@@ -1,12 +1,10 @@
 import { faker } from "@faker-js/faker";
-import {
-  VariantAnalysisRepoStatus,
-  VariantAnalysisScannedRepository,
-} from "../../../../src/variant-analysis/shared/variant-analysis";
+import type { VariantAnalysisScannedRepository } from "../../../../src/variant-analysis/shared/variant-analysis";
+import { VariantAnalysisRepoStatus } from "../../../../src/variant-analysis/shared/variant-analysis";
 import { createMockRepositoryWithMetadata } from "./repository";
 
 export function createMockScannedRepo(
-  name: string = faker.random.word(),
+  name: string = faker.word.sample(),
   isPrivate: boolean = faker.datatype.boolean(),
   analysisStatus: VariantAnalysisRepoStatus = VariantAnalysisRepoStatus.Pending,
 ): VariantAnalysisScannedRepository {
@@ -17,8 +15,8 @@ export function createMockScannedRepo(
       private: isPrivate,
     },
     analysisStatus,
-    resultCount: faker.datatype.number(),
-    artifactSizeInBytes: faker.datatype.number(),
+    resultCount: faker.number.int(),
+    artifactSizeInBytes: faker.number.int(),
   };
 }
 

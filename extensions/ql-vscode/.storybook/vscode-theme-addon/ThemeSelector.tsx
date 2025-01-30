@@ -1,15 +1,14 @@
 import * as React from "react";
-import { FunctionComponent, useCallback } from "react";
+import type { FunctionComponent } from "react";
+import { useCallback } from "react";
 
-import { useGlobals } from "@storybook/api";
+import { useGlobals } from "@storybook/manager-api";
 import {
   IconButton,
-  Icons,
-  WithTooltip,
   TooltipLinkList,
-  Link,
-  WithHideFn,
+  WithTooltip,
 } from "@storybook/components";
+import { DashboardIcon } from "@storybook/icons";
 
 import { themeNames, VSCodeTheme } from "./theme";
 
@@ -26,7 +25,7 @@ export const ThemeSelector: FunctionComponent = () => {
   );
 
   const createLinks = useCallback(
-    (onHide: () => void): Link[] =>
+    (onHide: () => void) =>
       Object.values(VSCodeTheme).map((theme) => ({
         id: theme,
         onClick() {
@@ -44,8 +43,8 @@ export const ThemeSelector: FunctionComponent = () => {
     <WithTooltip
       placement="top"
       trigger="click"
-      closeOnClick
-      tooltip={({ onHide }: WithHideFn) => (
+      closeOnOutsideClick
+      tooltip={({ onHide }: { onHide: () => void }) => (
         <TooltipLinkList links={createLinks(onHide)} />
       )}
     >
@@ -54,7 +53,7 @@ export const ThemeSelector: FunctionComponent = () => {
         title="Change the theme of the preview"
         active={vscodeTheme !== VSCodeTheme.Dark}
       >
-        <Icons icon="dashboard" />
+        <DashboardIcon />
       </IconButton>
     </WithTooltip>
   );

@@ -1,20 +1,22 @@
-import { authentication, extensions, Uri } from "vscode";
+import { authentication, Uri } from "vscode";
 import { join } from "path";
 import { SemVer } from "semver";
 
-import { CodeQLCliServer, QueryInfoByLanguage } from "../../../src/cli";
-import { CodeQLExtensionInterface } from "../../../src/extension";
+import type {
+  CodeQLCliServer,
+  QueryInfoByLanguage,
+} from "../../../src/codeql-cli/cli";
 import { itWithCodeQL } from "../cli";
+import { getOnDiskWorkspaceFolders } from "../../../src/common/vscode/workspace-folders";
 import {
-  getOnDiskWorkspaceFolders,
-  getQlPackForDbscheme,
-  languageToDbScheme,
-} from "../../../src/helpers";
-import { resolveQueries } from "../../../src/contextual/queryResolver";
-import { KeyType } from "../../../src/contextual/keyType";
+  KeyType,
+  resolveContextualQueries,
+} from "../../../src/language-support";
 import { faker } from "@faker-js/faker";
-
-jest.setTimeout(60_000);
+import { getActivatedExtension } from "../global.helper";
+import type { BaseLogger } from "../../../src/common/logging";
+import { getQlPackForDbscheme } from "../../../src/databases/qlpack";
+import { dbSchemeToLanguage } from "../../../src/common/query-language";
 
 /**
  * Perform proper integration tests by running the CLI
@@ -23,20 +25,22 @@ describe("Use cli", () => {
   let cli: CodeQLCliServer;
   let supportedLanguages: string[];
 
+  let logSpy: jest.SpiedFunction<BaseLogger["log"]>;
+
+  const languageToDbScheme = Object.entries(dbSchemeToLanguage).reduce(
+    (acc, [k, v]) => {
+      acc[v] = k;
+      return acc;
+    },
+    {} as { [k: string]: string },
+  );
+
   beforeEach(async () => {
-    const extension = await extensions
-      .getExtension<CodeQLExtensionInterface | Record<string, never>>(
-        "GitHub.vscode-codeql",
-      )!
-      .activate();
-    if ("cliServer" in extension) {
-      cli = extension.cliServer;
-      supportedLanguages = await cli.getSupportedLanguages();
-    } else {
-      throw new Error(
-        "Extension not initialized. Make sure cli is downloaded and installed properly.",
-      );
-    }
+    const extension = await getActivatedExtension();
+    cli = extension.cliServer;
+    supportedLanguages = await cli.getSupportedLanguages();
+
+    logSpy = jest.spyOn(cli.logger, "log");
   });
 
   if (process.env.CLI_VERSION && process.env.CLI_VERSION !== "nightly") {
@@ -49,7 +53,26 @@ describe("Use cli", () => {
 
   it("should resolve ram", async () => {
     const result = await (cli as any).resolveRam(8192);
-    expect(result).toEqual(["-J-Xmx4096M", "--off-heap-ram=4096"]);
+    expect(result.length).toEqual(2);
+    expect(result[0]).toMatch(/^-J-Xmx\d+M$/);
+    expect(result[1]).toMatch(/^--off-heap-ram=\d+$/);
+  });
+
+  describe("silent logging", () => {
+    it("should log command output", async () => {
+      const queryDir = getOnDiskWorkspaceFolders()[0];
+      await cli.resolveQueries(queryDir);
+
+      expect(logSpy).toHaveBeenCalled();
+    });
+
+    it("shouldn't log command output if the `silent` flag is set", async () => {
+      const queryDir = getOnDiskWorkspaceFolders()[0];
+      const silent = true;
+      await cli.resolveQueries(queryDir, silent);
+
+      expect(logSpy).not.toHaveBeenCalled();
+    });
   });
 
   itWithCodeQL()("should resolve query packs", async () => {
@@ -97,7 +120,11 @@ describe("Use cli", () => {
           expect(pack.queryPack).toContain(lang);
         }
 
-        const result = await resolveQueries(cli, pack, KeyType.PrintAstQuery);
+        const result = await resolveContextualQueries(
+          cli,
+          pack,
+          KeyType.PrintAstQuery,
+        );
 
         // It doesn't matter what the name or path of the query is, only
         // that we have found exactly one query.
@@ -132,10 +159,10 @@ describe("Use cli", () => {
         const getSession = jest
           .spyOn(authentication, "getSession")
           .mockResolvedValue({
-            id: faker.datatype.uuid(),
+            id: faker.string.uuid(),
             accessToken: "gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             account: {
-              id: faker.datatype.uuid(),
+              id: faker.string.uuid(),
               label: "Account",
             },
             scopes: ["read:packages"],

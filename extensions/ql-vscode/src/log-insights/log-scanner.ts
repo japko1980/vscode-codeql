@@ -1,5 +1,7 @@
-import { SummaryEvent } from "./log-summary";
-import { readJsonlFile } from "./jsonl-reader";
+import type { Disposable } from "../common/disposable-object";
+import { readJsonlFile } from "../common/jsonl-reader";
+import type { ProgressCallback } from "../common/vscode/progress";
+import type { SummaryEvent } from "./log-summary";
 
 /**
  * Callback interface used to report diagnostics from a log scanner.
@@ -62,13 +64,6 @@ export interface EvaluationLogScannerProvider {
   ): EvaluationLogScanner;
 }
 
-/**
- * Same as VSCode's `Disposable`, but avoids a dependency on VS Code.
- */
-export interface Disposable {
-  dispose(): void;
-}
-
 export class EvaluationLogScannerSet {
   private readonly scannerProviders = new Map<
     number,
@@ -109,7 +104,7 @@ export class EvaluationLogScannerSet {
       p.createScanner(problemReporter),
     );
 
-    await readJsonlFile(jsonSummaryLocation, async (obj) => {
+    await readJsonlFile<SummaryEvent>(jsonSummaryLocation, async (obj) => {
       scanners.forEach((scanner) => {
         scanner.onEvent(obj);
       });
@@ -117,4 +112,28 @@ export class EvaluationLogScannerSet {
 
     scanners.forEach((scanner) => scanner.onDone());
   }
+}
+
+/**
+ * Scan the evaluator summary log using the given scanner. For convenience, returns the scanner.
+ *
+ * @param jsonSummaryLocation The file path of the JSON summary log.
+ * @param scanner The scanner to process events from the log
+ */
+export async function scanLog<T extends EvaluationLogScanner>(
+  jsonSummaryLocation: string,
+  scanner: T,
+  progress?: ProgressCallback,
+): Promise<T> {
+  progress?.({
+    // all scans have step 1 - the backing progress tracker allows increments instead of steps - but for now we are happy with a tiny UI that says what is happening
+    message: `Scanning ...`,
+    step: 1,
+    maxStep: 2,
+  });
+  await readJsonlFile<SummaryEvent>(jsonSummaryLocation, async (obj) => {
+    scanner.onEvent(obj);
+  });
+  scanner.onDone();
+  return scanner;
 }

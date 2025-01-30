@@ -1,11 +1,8 @@
-import * as React from "react";
 import { render as reactRender, screen } from "@testing-library/react";
 import { VariantAnalysisStatus } from "../../../variant-analysis/shared/variant-analysis";
-import {
-  VariantAnalysisStatusStats,
-  VariantAnalysisStatusStatsProps,
-} from "../VariantAnalysisStatusStats";
-import { formatDate } from "../../../pure/date";
+import type { VariantAnalysisStatusStatsProps } from "../VariantAnalysisStatusStats";
+import { VariantAnalysisStatusStats } from "../VariantAnalysisStatusStats";
+import { formatDate } from "../../../common/date";
 
 describe(VariantAnalysisStatusStats.name, () => {
   const render = (props: Partial<VariantAnalysisStatusStatsProps> = {}) =>
@@ -54,7 +51,7 @@ describe(VariantAnalysisStatusStats.name, () => {
       onViewLogsClick: () => undefined,
     });
 
-    expect(screen.getByText("View logs")).toBeInTheDocument();
+    expect(screen.getByText("View actions logs")).toBeInTheDocument();
   });
 
   it("renders when there isn't a viewLogs links", () => {
@@ -63,6 +60,6 @@ describe(VariantAnalysisStatusStats.name, () => {
       onViewLogsClick: undefined,
     });
 
-    expect(screen.queryByText("View logs")).not.toBeInTheDocument();
+    expect(screen.queryByText("View actions logs")).not.toBeInTheDocument();
   });
 });

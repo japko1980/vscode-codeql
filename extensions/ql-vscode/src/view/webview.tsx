@@ -1,12 +1,36 @@
-import { render as ReactDOM_render } from "react-dom";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
 import { vscode } from "./vscode-api";
 
-import { WebviewDefinition } from "./webview-definition";
+import { registerUnhandledErrorListener } from "./common/errors";
+import type { WebviewDefinition } from "./webview-definition";
+
+import compareView from "./compare";
+import comparePerformance from "./compare-performance";
+import dataFlowPathsView from "./data-flow-paths";
+import methodModelingView from "./method-modeling";
+import modelEditorView from "./model-editor";
+import resultsView from "./results";
+import variantAnalysisView from "./variant-analysis";
+import modelAlertsView from "./model-alerts";
 
 // Allow all views to use Codicons
 import "@vscode/codicons/dist/codicon.css";
 
+const views: Record<string, WebviewDefinition> = {
+  compare: compareView,
+  "compare-performance": comparePerformance,
+  "data-flow-paths": dataFlowPathsView,
+  "method-modeling": methodModelingView,
+  "model-editor": modelEditorView,
+  results: resultsView,
+  "variant-analysis": variantAnalysisView,
+  "model-alerts": modelAlertsView,
+};
+
 const render = () => {
+  registerUnhandledErrorListener();
+
   const element = document.getElementById("root");
 
   if (!element) {
@@ -20,16 +44,19 @@ const render = () => {
     return;
   }
 
-  // It's a lot harder to use dynamic imports since those don't import the CSS
-  // and require a less strict CSP policy
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const view: WebviewDefinition = require(`./${viewName}/index.tsx`).default;
+  const view: WebviewDefinition = views[viewName];
+  if (!view) {
+    console.error(`Could not find view with name "${viewName}"`);
+    return;
+  }
 
-  ReactDOM_render(
-    view.component,
-    document.getElementById("root"),
-    // Post a message to the extension when fully loaded.
-    () => vscode.postMessage({ t: "viewLoaded", viewName }),
+  const root = createRoot(element);
+  root.render(
+    <StrictMode>
+      <div ref={() => vscode.postMessage({ t: "viewLoaded", viewName })}>
+        {view.component}
+      </div>
+    </StrictMode>,
   );
 };
 

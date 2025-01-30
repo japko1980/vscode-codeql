@@ -1,11 +1,13 @@
-import { VariantAnalysisHistoryItem } from "./variant-analysis-history-item";
-import { LocalQueryInfo } from "../query-results";
-import { assertNever } from "../pure/helpers-pure";
-import { pluralize } from "../pure/word";
+import type { VariantAnalysisHistoryItem } from "./variant-analysis-history-item";
+import type { LocalQueryInfo } from "../query-results";
+import { assertNever } from "../common/helpers-pure";
+import { pluralize } from "../common/word";
 import {
   hasRepoScanCompleted,
   getActionsWorkflowRunUrl as getVariantAnalysisActionsWorkflowRunUrl,
 } from "../variant-analysis/shared/variant-analysis";
+import type { QueryLanguage } from "../common/query-language";
+import { getGitHubInstanceUrl } from "../config";
 
 export type QueryHistoryInfo = LocalQueryInfo | VariantAnalysisHistoryItem;
 
@@ -49,6 +51,17 @@ export function getQueryText(item: QueryHistoryInfo): string {
   }
 }
 
+export function getLanguage(item: QueryHistoryInfo): QueryLanguage | undefined {
+  switch (item.t) {
+    case "local":
+      return item.initialInfo.databaseInfo.language;
+    case "variant-analysis":
+      return item.variantAnalysis.language;
+    default:
+      assertNever(item);
+  }
+}
+
 export function buildRepoLabel(item: VariantAnalysisHistoryItem): string {
   const totalScannedRepositoryCount =
     item.variantAnalysis.scannedRepos?.length ?? 0;
@@ -67,5 +80,8 @@ export function buildRepoLabel(item: VariantAnalysisHistoryItem): string {
 export function getActionsWorkflowRunUrl(
   item: VariantAnalysisHistoryItem,
 ): string {
-  return getVariantAnalysisActionsWorkflowRunUrl(item.variantAnalysis);
+  return getVariantAnalysisActionsWorkflowRunUrl(
+    item.variantAnalysis,
+    getGitHubInstanceUrl(),
+  );
 }

@@ -1,22 +1,19 @@
-import * as React from "react";
 import { render as reactRender, screen } from "@testing-library/react";
+import type { VariantAnalysis } from "../../../variant-analysis/shared/variant-analysis";
 import {
-  VariantAnalysis,
   VariantAnalysisFailureReason,
   VariantAnalysisRepoStatus,
   VariantAnalysisStatus,
 } from "../../../variant-analysis/shared/variant-analysis";
-import {
-  VariantAnalysisOutcomePanelProps,
-  VariantAnalysisOutcomePanels,
-} from "../VariantAnalysisOutcomePanels";
+import type { VariantAnalysisOutcomePanelProps } from "../VariantAnalysisOutcomePanels";
+import { VariantAnalysisOutcomePanels } from "../VariantAnalysisOutcomePanels";
 import { createMockVariantAnalysis } from "../../../../test/factories/variant-analysis/shared/variant-analysis";
 import { createMockRepositoryWithMetadata } from "../../../../test/factories/variant-analysis/shared/repository";
 import {
   createMockScannedRepo,
   createMockScannedRepos,
 } from "../../../../test/factories/variant-analysis/shared/scanned-repositories";
-import { defaultFilterSortState } from "../../../pure/variant-analysis-filter-sort";
+import { defaultFilterSortState } from "../../../variant-analysis/shared/variant-analysis-filter-sort";
 
 describe(VariantAnalysisOutcomePanels.name, () => {
   const defaultVariantAnalysis = {

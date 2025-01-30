@@ -1,19 +1,28 @@
-import * as sarif from "sarif";
+import type {
+  Log,
+  PhysicalLocation,
+  Region,
+  ReportingDescriptor,
+  Result,
+  Run,
+} from "sarif";
+import type { SarifLink } from "../common/sarif-utils";
 import {
   parseHighlightedLine,
   parseSarifPlainTextMessage,
   parseSarifRegion,
-} from "../pure/sarif-utils";
+} from "../common/sarif-utils";
 
-import {
+import type {
   AnalysisAlert,
-  CodeFlow,
   AnalysisMessage,
+  AnalysisMessageLocationTokenLocation,
   AnalysisMessageToken,
-  ResultSeverity,
-  ThreadFlow,
+  CodeFlow,
   CodeSnippet,
   HighlightedRegion,
+  ResultSeverity,
+  ThreadFlow,
 } from "./shared/analysis-result";
 
 // A line of more than 8k characters is probably generated.
@@ -24,7 +33,7 @@ const CODE_SNIPPET_HIGHLIGHTED_REGION_MINIMUM_RATIO = 0.01;
 const defaultSeverity = "Warning";
 
 export function extractAnalysisAlerts(
-  sarifLog: sarif.Log,
+  sarifLog: Log,
   fileLinkPrefix: string,
 ): {
   alerts: AnalysisAlert[];
@@ -48,8 +57,8 @@ export function extractAnalysisAlerts(
 }
 
 function extractResultAlerts(
-  run: sarif.Run,
-  result: sarif.Result,
+  run: Run,
+  result: Result,
   fileLinkPrefix: string,
 ): AnalysisAlert[] {
   const alerts: AnalysisAlert[] = [];
@@ -91,7 +100,7 @@ function extractResultAlerts(
 }
 
 function getShortDescription(
-  rule: sarif.ReportingDescriptor | undefined,
+  rule: ReportingDescriptor | undefined,
   message: AnalysisMessage,
 ): string {
   if (rule?.shortDescription?.text) {
@@ -102,9 +111,9 @@ function getShortDescription(
 }
 
 export function tryGetSeverity(
-  sarifRun: sarif.Run,
-  result: sarif.Result,
-  rule: sarif.ReportingDescriptor | undefined,
+  sarifRun: Run,
+  result: Result,
+  rule: ReportingDescriptor | undefined,
 ): ResultSeverity | undefined {
   if (!sarifRun || !result || !rule) {
     return undefined;
@@ -128,9 +137,9 @@ export function tryGetSeverity(
 }
 
 export function tryGetRule(
-  sarifRun: sarif.Run,
-  result: sarif.Result,
-): sarif.ReportingDescriptor | undefined {
+  sarifRun: Run,
+  result: Result,
+): ReportingDescriptor | undefined {
   if (!sarifRun || !result) {
     return undefined;
   }
@@ -168,9 +177,26 @@ export function tryGetRule(
   return undefined;
 }
 
+export function tryGetFilePath(
+  physicalLocation: PhysicalLocation,
+): string | undefined {
+  const filePath = physicalLocation.artifactLocation?.uri;
+  // We expect the location uri value to be a relative file path, with no scheme.
+  // We only need to support output from CodeQL here, so we can be quite strict,
+  // even though the SARIF spec supports many more types of URI.
+  if (
+    filePath === undefined ||
+    filePath === "" ||
+    filePath.startsWith("file:")
+  ) {
+    return undefined;
+  }
+  return filePath;
+}
+
 function getCodeSnippet(
-  contextRegion?: sarif.Region,
-  region?: sarif.Region,
+  contextRegion?: Region,
+  region?: Region,
 ): CodeSnippet | undefined {
   const actualRegion = contextRegion ?? region;
 
@@ -215,7 +241,7 @@ function getCodeSnippet(
   };
 }
 
-function getHighlightedRegion(region: sarif.Region): HighlightedRegion {
+function getHighlightedRegion(region: Region): HighlightedRegion {
   const { startLine, startColumn, endLine, endColumn } =
     parseSarifRegion(region);
 
@@ -230,21 +256,18 @@ function getHighlightedRegion(region: sarif.Region): HighlightedRegion {
   };
 }
 
-function getCodeFlows(
-  result: sarif.Result,
-  fileLinkPrefix: string,
-): CodeFlow[] {
+function getCodeFlows(result: Result, fileLinkPrefix: string): CodeFlow[] {
   const codeFlows = [];
 
   if (result.codeFlows) {
     for (const codeFlow of result.codeFlows) {
-      const threadFlows = [];
+      const threadFlows: ThreadFlow[] = [];
 
       for (const threadFlow of codeFlow.threadFlows) {
         for (const threadFlowLocation of threadFlow.locations) {
           const physicalLocation =
             threadFlowLocation!.location!.physicalLocation!;
-          const filePath = physicalLocation!.artifactLocation!.uri!;
+          const filePath = tryGetFilePath(physicalLocation);
           const codeSnippet = getCodeSnippet(
             physicalLocation.contextRegion,
             physicalLocation.region,
@@ -253,14 +276,16 @@ function getCodeFlows(
             ? getHighlightedRegion(physicalLocation.region)
             : undefined;
 
-          threadFlows.push({
-            fileLink: {
-              fileLinkPrefix,
-              filePath,
-            },
-            codeSnippet,
-            highlightedRegion,
-          } as ThreadFlow);
+          if (filePath !== undefined) {
+            threadFlows.push({
+              fileLink: {
+                fileLinkPrefix,
+                filePath,
+              },
+              codeSnippet,
+              highlightedRegion,
+            });
+          }
         }
       }
 
@@ -271,10 +296,7 @@ function getCodeFlows(
   return codeFlows;
 }
 
-function getMessage(
-  result: sarif.Result,
-  fileLinkPrefix: string,
-): AnalysisMessage {
+function getMessage(result: Result, fileLinkPrefix: string): AnalysisMessage {
   const tokens: AnalysisMessageToken[] = [];
 
   const messageText = result.message!.text!;
@@ -284,24 +306,47 @@ function getMessage(
     if (typeof messagePart === "string") {
       tokens.push({ t: "text", text: messagePart });
     } else {
-      const relatedLocation = result.relatedLocations!.find(
-        (rl) => rl.id === messagePart.dest,
-      );
-      tokens.push({
-        t: "location",
-        text: messagePart.text,
-        location: {
-          fileLink: {
-            fileLinkPrefix,
-            filePath: relatedLocation!.physicalLocation!.artifactLocation!.uri!,
-          },
-          highlightedRegion: getHighlightedRegion(
-            relatedLocation!.physicalLocation!.region!,
-          ),
-        },
-      });
+      const location = getRelatedLocation(messagePart, result, fileLinkPrefix);
+      if (location === undefined) {
+        tokens.push({ t: "text", text: messagePart.text });
+      } else {
+        tokens.push({
+          t: "location",
+          text: messagePart.text,
+          location,
+        });
+      }
     }
   }
 
   return { tokens };
+}
+
+function getRelatedLocation(
+  messagePart: SarifLink,
+  result: Result,
+  fileLinkPrefix: string,
+): AnalysisMessageLocationTokenLocation | undefined {
+  const relatedLocation = result.relatedLocations!.find(
+    (rl) => rl.id === messagePart.dest,
+  );
+  if (
+    relatedLocation === undefined ||
+    relatedLocation.physicalLocation?.artifactLocation?.uri === undefined ||
+    relatedLocation.physicalLocation?.artifactLocation?.uri?.startsWith(
+      "file:",
+    ) ||
+    relatedLocation.physicalLocation?.region === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    fileLink: {
+      fileLinkPrefix,
+      filePath: relatedLocation.physicalLocation.artifactLocation.uri,
+    },
+    highlightedRegion: getHighlightedRegion(
+      relatedLocation.physicalLocation.region,
+    ),
+  };
 }

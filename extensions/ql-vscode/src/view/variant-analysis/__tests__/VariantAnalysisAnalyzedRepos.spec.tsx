@@ -1,22 +1,18 @@
-import * as React from "react";
-import { render as reactRender, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, render as reactRender, screen } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import {
   VariantAnalysisRepoStatus,
   VariantAnalysisScannedRepositoryDownloadStatus,
   VariantAnalysisStatus,
 } from "../../../variant-analysis/shared/variant-analysis";
-import {
-  VariantAnalysisAnalyzedRepos,
-  VariantAnalysisAnalyzedReposProps,
-} from "../VariantAnalysisAnalyzedRepos";
+import type { VariantAnalysisAnalyzedReposProps } from "../VariantAnalysisAnalyzedRepos";
+import { VariantAnalysisAnalyzedRepos } from "../VariantAnalysisAnalyzedRepos";
 import { createMockVariantAnalysis } from "../../../../test/factories/variant-analysis/shared/variant-analysis";
 import { createMockRepositoryWithMetadata } from "../../../../test/factories/variant-analysis/shared/repository";
 import { createMockScannedRepo } from "../../../../test/factories/variant-analysis/shared/scanned-repositories";
-import {
-  defaultFilterSortState,
-  SortKey,
-} from "../../../pure/variant-analysis-filter-sort";
+import { SortKey } from "../../../variant-analysis/shared/variant-analysis-filter-sort";
+import { permissiveFilterSortState } from "../../../../test/unit-tests/variant-analysis-filter-sort.test";
+import { ResultFormat } from "../../../variant-analysis/shared/variant-analysis-result-format";
 
 describe(VariantAnalysisAnalyzedRepos.name, () => {
   const defaultVariantAnalysis = createMockVariantAnalysis({
@@ -101,6 +97,7 @@ describe(VariantAnalysisAnalyzedRepos.name, () => {
     return reactRender(
       <VariantAnalysisAnalyzedRepos
         variantAnalysis={defaultVariantAnalysis}
+        resultFormat={ResultFormat.Alerts}
         {...props}
       />,
     );
@@ -155,18 +152,22 @@ describe(VariantAnalysisAnalyzedRepos.name, () => {
     expect(
       screen.queryByText("This is an empty block."),
     ).not.toBeInTheDocument();
-    await userEvent.click(
-      screen.getByRole("button", {
-        name: /octodemo\/hello-world-2/,
-      }),
-    );
+
+    await act(async () => {
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: /octodemo\/hello-world-2/,
+        }),
+      );
+    });
+
     expect(screen.getByText("This is an empty block.")).toBeInTheDocument();
   });
 
   it("uses the search value", () => {
     render({
       filterSortState: {
-        ...defaultFilterSortState,
+        ...permissiveFilterSortState,
         searchValue: "world-2",
       },
     });
@@ -186,8 +187,8 @@ describe(VariantAnalysisAnalyzedRepos.name, () => {
   it("uses the sort key", async () => {
     render({
       filterSortState: {
-        ...defaultFilterSortState,
-        sortKey: SortKey.Stars,
+        ...permissiveFilterSortState,
+        sortKey: SortKey.Popularity,
       },
     });
 
@@ -202,11 +203,11 @@ describe(VariantAnalysisAnalyzedRepos.name, () => {
     expect(rows[5]).toHaveTextContent("octodemo/hello-world-6");
   });
 
-  it("uses the results count sort key", async () => {
+  it("uses the 'Number of results' sort key", async () => {
     render({
       filterSortState: {
-        ...defaultFilterSortState,
-        sortKey: SortKey.ResultsCount,
+        ...permissiveFilterSortState,
+        sortKey: SortKey.NumberOfResults,
       },
     });
 

@@ -1,15 +1,16 @@
 import { TreeItemCollapsibleState, ThemeIcon, ThemeColor } from "vscode";
 import { join } from "path";
 import { ensureDir, remove, writeJson } from "fs-extra";
-import { DbConfig } from "../../../../src/databases/config/db-config";
+import type { DbConfig } from "../../../../src/databases/config/db-config";
 import { DbManager } from "../../../../src/databases/db-manager";
 import { DbConfigStore } from "../../../../src/databases/config/db-config-store";
 import { DbTreeDataProvider } from "../../../../src/databases/ui/db-tree-data-provider";
-import { DbTreeViewItem } from "../../../../src/databases/ui/db-tree-view-item";
-import { ExtensionApp } from "../../../../src/common/vscode/vscode-app";
+import type { DbTreeViewItem } from "../../../../src/databases/ui/db-tree-view-item";
+import { ExtensionApp } from "../../../../src/common/vscode/extension-app";
 import { createMockExtensionContext } from "../../../factories/extension-context";
 import { createDbConfig } from "../../../factories/db-config-factories";
 import { setRemoteControllerRepo } from "../../../../src/config";
+import { createMockVariantAnalysisConfig } from "../../../factories/config";
 
 describe("db panel", () => {
   const workspaceStoragePath = join(__dirname, "test-workspace-storage");
@@ -34,7 +35,11 @@ describe("db panel", () => {
     const app = new ExtensionApp(extensionContext);
 
     dbConfigStore = new DbConfigStore(app, false);
-    dbManager = new DbManager(app, dbConfigStore);
+    dbManager = new DbManager(
+      app,
+      dbConfigStore,
+      createMockVariantAnalysisConfig(),
+    );
   });
 
   beforeEach(async () => {

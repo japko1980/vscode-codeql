@@ -14,21 +14,27 @@
 import { pathExists, readJson, writeJson } from "fs-extra";
 import { resolve, relative } from "path";
 
-import { Octokit, type RestEndpointMethodTypes } from "@octokit/rest";
+import type { Octokit } from "@octokit/core";
+import type { EndpointDefaults } from "@octokit/types";
+import type { RestEndpointMethodTypes } from "@octokit/rest";
 import { throttling } from "@octokit/plugin-throttling";
 
 import { getFiles } from "./util/files";
-import type { GitHubApiRequest } from "../src/mocks/gh-api-request";
-import { isGetVariantAnalysisRequest } from "../src/mocks/gh-api-request";
-import { VariantAnalysis } from "../src/variant-analysis/gh-api/variant-analysis";
-import { RepositoryWithMetadata } from "../src/variant-analysis/gh-api/repository";
+import type { GitHubApiRequest } from "../src/common/mock-gh-api/gh-api-request";
+import { isGetVariantAnalysisRequest } from "../src/common/mock-gh-api/gh-api-request";
+import type { VariantAnalysis } from "../src/variant-analysis/gh-api/variant-analysis";
+import type { RepositoryWithMetadata } from "../src/variant-analysis/gh-api/repository";
+import { AppOctokit } from "../src/common/octokit";
 
 const extensionDirectory = resolve(__dirname, "..");
-const scenariosDirectory = resolve(extensionDirectory, "src/mocks/scenarios");
+const scenariosDirectory = resolve(
+  extensionDirectory,
+  "src/common/mock-gh-api/scenarios",
+);
 
 // Make sure we don't run into rate limits by automatically waiting until we can
 // make another request.
-const MyOctokit = Octokit.plugin(throttling);
+const MyOctokit = AppOctokit.plugin(throttling);
 
 const auth = process.env.GITHUB_TOKEN;
 
@@ -37,7 +43,7 @@ const octokit = new MyOctokit({
   throttle: {
     onRateLimit: (
       retryAfter: number,
-      options: any,
+      options: EndpointDefaults,
       octokit: Octokit,
     ): boolean => {
       octokit.log.warn(
@@ -48,7 +54,7 @@ const octokit = new MyOctokit({
     },
     onSecondaryRateLimit: (
       _retryAfter: number,
-      options: any,
+      options: EndpointDefaults,
       octokit: Octokit,
     ): void => {
       octokit.log.warn(

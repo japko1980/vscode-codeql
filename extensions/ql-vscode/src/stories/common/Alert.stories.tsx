@@ -1,6 +1,4 @@
-import * as React from "react";
-
-import { ComponentStory, ComponentMeta } from "@storybook/react";
+import type { Meta, StoryFn } from "@storybook/react";
 import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react";
 
 import { VariantAnalysisContainer } from "../../view/variant-analysis/VariantAnalysisContainer";
@@ -16,9 +14,9 @@ export default {
       </VariantAnalysisContainer>
     ),
   ],
-} as ComponentMeta<typeof Alert>;
+} as Meta<typeof Alert>;
 
-const Template: ComponentStory<typeof Alert> = (args) => <Alert {...args} />;
+const Template: StoryFn<typeof Alert> = (args) => <Alert {...args} />;
 
 export const Warning = Template.bind({});
 Warning.args = {
@@ -72,8 +70,8 @@ ErrorExample.args = {
     <>
       Request to
       https://api.github.com/repos/octodemo/Hello-World/code-scanning/codeql/queries
-      failed. <VSCodeLink>Check logs</VSCodeLink> and try running this query
-      again.
+      failed. <VSCodeLink>View actions logs</VSCodeLink> and try running this
+      query again.
     </>
   ),
 };
@@ -86,7 +84,7 @@ ErrorWithButtons.args = {
     "Request to https://api.github.com/repos/octodemo/Hello-World/code-scanning/codeql/queries failed. Try running this query again.",
   actions: (
     <>
-      <VSCodeButton appearance="secondary">View logs</VSCodeButton>
+      <VSCodeButton appearance="secondary">View actions logs</VSCodeButton>
       <VSCodeButton>Retry</VSCodeButton>
     </>
   ),

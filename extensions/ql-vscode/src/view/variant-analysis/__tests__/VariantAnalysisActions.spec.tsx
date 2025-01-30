@@ -1,11 +1,8 @@
-import * as React from "react";
 import { render as reactRender, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { userEvent } from "@testing-library/user-event";
 import { VariantAnalysisStatus } from "../../../variant-analysis/shared/variant-analysis";
-import {
-  VariantAnalysisActions,
-  VariantAnalysisActionsProps,
-} from "../VariantAnalysisActions";
+import type { VariantAnalysisActionsProps } from "../VariantAnalysisActions";
+import { VariantAnalysisActions } from "../VariantAnalysisActions";
 
 describe(VariantAnalysisActions.name, () => {
   const onStopQueryClick = jest.fn();
@@ -46,6 +43,24 @@ describe(VariantAnalysisActions.name, () => {
 
     await userEvent.click(screen.getByText("Stop query"));
     expect(onStopQueryClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the stopping query disabled button when canceling", async () => {
+    render({
+      variantAnalysisStatus: VariantAnalysisStatus.Canceling,
+    });
+
+    const button = screen.getByText("Stopping query");
+    expect(button).toBeInTheDocument();
+    expect(button.getElementsByTagName("input")[0]).toBeDisabled();
+  });
+
+  it("does not render a stop query button when canceling", async () => {
+    render({
+      variantAnalysisStatus: VariantAnalysisStatus.Canceling,
+    });
+
+    expect(screen.queryByText("Stop query")).not.toBeInTheDocument();
   });
 
   it("renders 3 buttons when in progress with results", async () => {
@@ -92,5 +107,33 @@ describe(VariantAnalysisActions.name, () => {
     });
 
     expect(container.querySelectorAll("vscode-button").length).toEqual(0);
+  });
+
+  it("changes the text on the buttons when repositories are selected", async () => {
+    render({
+      variantAnalysisStatus: VariantAnalysisStatus.Succeeded,
+      showResultActions: true,
+      hasSelectedRepositories: true,
+      hasFilteredRepositories: true,
+    });
+
+    expect(screen.getByText("Export selected results")).toBeInTheDocument();
+    expect(
+      screen.getByText("Copy selected repositories as a list"),
+    ).toBeInTheDocument();
+  });
+
+  it("changes the text on the buttons when repositories are filtered", async () => {
+    render({
+      variantAnalysisStatus: VariantAnalysisStatus.Succeeded,
+      showResultActions: true,
+      hasSelectedRepositories: false,
+      hasFilteredRepositories: true,
+    });
+
+    expect(screen.getByText("Export filtered results")).toBeInTheDocument();
+    expect(
+      screen.getByText("Copy filtered repositories as a list"),
+    ).toBeInTheDocument();
   });
 });
