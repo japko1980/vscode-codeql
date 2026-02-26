@@ -2143,7 +2143,7 @@
     "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
-    "@vscode/test-electron": "^2.3.9",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.2.1",
     "ansi-colors": "^4.1.1",
     "applicationinsights": "^2.9.5",
